@@ -47,12 +47,12 @@ pnpm.cmd install
 cd ..\Shirone
 pnpm.cmd install
 
-# 3. 启动（server:5175 + client:5173）
+# 3. 一键启动：内容仓监听同步 + 博客 dev(:4321) + Admin(server:5175 + client:5173)
 cd ..\Shirone-Admin
-pnpm.cmd dev
+node workspace/content-watch.mjs
 ```
 
-浏览器打开 http://localhost:5173 。
+三端就绪后统一打印地址：Admin 界面 http://localhost:5173 ，博客真站预览 http://localhost:4321 。
 
 不配置 `.env` 时按上表相对位置自动解析两仓；路径不同或要改端口时，复制 `.env.example` 为 `.env` 修改。
 
@@ -77,9 +77,10 @@ shared/   API DTO 类型（纯类型，无运行时依赖）
 pnpm workspace 单仓三包：
 
 ```powershell
-pnpm.cmd dev          # server + client 并行
-pnpm.cmd type-check   # 全 workspace tsc --noEmit
-pnpm.cmd build        # client 产物在 client/dist
+node workspace/content-watch.mjs   # 一键：内容同步 + 博客 dev + Admin
+pnpm.cmd dev                       # 只启动 Admin（server + client 并行）
+pnpm.cmd type-check                # 全 workspace tsc --noEmit
+pnpm.cmd build                     # client 产物在 client/dist
 ```
 
 二期公网形态：换 Storage/Git 适配器实现 + nginx `/api` 反代，业务代码不动。
