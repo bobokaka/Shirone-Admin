@@ -2,6 +2,8 @@
 
 [Shirone](https://github.com/LyraVoid/Shirone) 博客的可视化内容管理工具：本地单机运行、前后端分离，直接读写 [Shirone-Content](https://github.com/LyraVoid/Shirone-Content) 内容仓，AI 辅助写作，一键双仓发布。
 
+![博客前台效果](docs/screenshot-blog.png)
+
 ## 功能特性
 
 - **文章编辑**：Markdown 源码模式编辑器（md-editor-v3），内置 Shirone 主题私有扩展片段（三冒号容器、file-tree、代码标签页、field 卡片等）；配图随文管理
