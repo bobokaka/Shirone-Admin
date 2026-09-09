@@ -52,7 +52,7 @@ cd ..\Shirone-Admin
 node workspace/content-watch.mjs
 ```
 
-三端就绪后统一打印地址：Admin 界面 http://localhost:5173 ，博客真站预览 http://localhost:4321 。
+三端就绪后统一打印地址：博客 http://localhost:4321/ ，Admin http://localhost:5173/ 。
 
 不配置 `.env` 时按上表相对位置自动解析两仓；路径不同或要改端口时，复制 `.env.example` 为 `.env` 修改。
 
