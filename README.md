@@ -4,6 +4,8 @@
 
 ![博客前台效果](docs/screenshot-blog.png)
 
+![管理后台·说说动态](docs/screenshot-admin.png)
+
 ## 功能特性
 
 - **文章编辑**：Markdown 源码模式编辑器（md-editor-v3），内置 Shirone 主题私有扩展片段（三冒号容器、file-tree、代码标签页、field 卡片等）；配图随文管理
