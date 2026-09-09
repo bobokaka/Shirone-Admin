@@ -2,9 +2,9 @@
 
 [Shirone](https://github.com/LyraVoid/Shirone) 博客的可视化内容管理工具：本地单机运行、前后端分离，直接读写 [Shirone-Content](https://github.com/LyraVoid/Shirone-Content) 内容仓，AI 辅助写作，一键双仓发布。
 
-![博客前台效果](docs/screenshot-blog.png)
+![博客前台效果](public/assets/images/screenshot-blog.png)
 
-![管理后台·说说动态](docs/screenshot-admin.png)
+![管理后台·说说动态](public/assets/images/screenshot-admin.png)
 
 ## 功能特性
 
@@ -39,7 +39,7 @@ blogs_ws/
 # 1. 三仓克隆到同一父目录
 git clone https://github.com/LyraVoid/Shirone.git
 git clone https://github.com/LyraVoid/Shirone-Content.git
-git clone https://github.com/<你的用户名>/Shirone-Admin.git
+git clone https://github.com/bobokaka/Shirone-Admin.git
 
 # 2. 安装依赖（主题仓也要装，真站预览依赖它的 node_modules）
 cd Shirone-Admin

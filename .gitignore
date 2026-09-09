@@ -11,3 +11,10 @@ tools/.shots/
 
 # IDE 会话状态（含本机路径）
 .idea/claudeCodeTabState.xml
+
+# OpenSpec 工作流产物
+openspec/
+
+# docs 仅保留空目录（.gitkeep），截图等本地内容不入库
+docs/*
+!docs/.gitkeep
