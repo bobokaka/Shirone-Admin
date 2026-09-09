@@ -1,0 +1,49 @@
+diff --git a/lib/es/chunks/index.mjs b/lib/es/chunks/index.mjs
+index 0238f7a3fe4bf0fb0ce895ed965086955e039b6f..e514bb18040c75d95e85033f31212df241159053 100644
+--- a/lib/es/chunks/index.mjs
++++ b/lib/es/chunks/index.mjs
+@@ -60,6 +60,9 @@ const useCopyCode = (props, html, key) => {
+   const rootRef = inject("rootRef");
+   const ult = inject("usedLanguageText");
+   const initCopyEntry = () => {
++    if (!rootRef.value) {
++      return;
++    }
+     rootRef.value.querySelectorAll(`#${editorId} .${prefix}-preview .${prefix}-code`).forEach((codeBlock) => {
+       let clearTimer = -1;
+       const copyButton = codeBlock.querySelector(
+@@ -210,7 +213,7 @@ const useMermaid = (props) => {
+     }
+   });
+   const replaceMermaid = async () => {
+-    if (!props.noMermaid && mermaidRef.value) {
++    if (!props.noMermaid && mermaidRef.value && rootRef.value) {
+       const mermaidSourceEles = rootRef.value.querySelectorAll(
+         `div.${prefix}-mermaid`
+       );
+@@ -2269,7 +2272,9 @@ const useMarkdownIt = (props, previewOnly) => {
+     bus.emit(editorId, CATALOG_CHANGED, headsRef.value);
+     nextTick(() => {
+       replaceMermaid().then(() => {
+-        zoomMermaid(rootRef.value.querySelectorAll(`#${editorId} .${prefix}-mermaid`));
++        if (rootRef.value) {
++          zoomMermaid(rootRef.value.querySelectorAll(`#${editorId} .${prefix}-mermaid`));
++        }
+       });
+     });
+   };
+@@ -2292,9 +2297,11 @@ const useMarkdownIt = (props, previewOnly) => {
+       if (props.setting.preview) {
+         nextTick(() => {
+           replaceMermaid().then(() => {
+-            zoomMermaid(
+-              rootRef.value.querySelectorAll(`#${editorId} .${prefix}-mermaid`)
+-            );
++            if (rootRef.value) {
++              zoomMermaid(
++                rootRef.value.querySelectorAll(`#${editorId} .${prefix}-mermaid`)
++              );
++            }
+           });
+           bus.emit(editorId, CATALOG_CHANGED, headsRef.value);
+         });

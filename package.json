@@ -1,0 +1,22 @@
+{
+	"name": "shirone-admin",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Shirone 博客内容可视化管理工具（本地单机，前后端分离）",
+	"scripts": {
+		"dev": "pnpm -r --parallel --filter ./server --filter ./client run dev",
+		"dev:server": "pnpm --filter @shirone-admin/server run dev",
+		"dev:client": "pnpm --filter @shirone-admin/client run dev",
+		"build": "pnpm -r run build",
+		"type-check": "pnpm -r run type-check"
+	},
+	"engines": {
+		"node": ">=22.12"
+	},
+	"packageManager": "pnpm@9.14.4",
+	"pnpm": {
+		"patchedDependencies": {
+			"md-editor-v3@4.21.3": "patches/md-editor-v3@4.21.3.patch"
+		}
+	}
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+.vite/
+tools/.shots/
+
+# Admin 工具本地数据（AI 设置含 API Key，禁止入库；实际位于仓库根 data/）
+/data/
+
+# IDE 会话状态（含本机路径）
+.idea/claudeCodeTabState.xml

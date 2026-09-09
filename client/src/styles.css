@@ -1,0 +1,822 @@
+/* ============================================================
+   Shirone Admin · Apple 风格毛玻璃主题
+   结构：设计令牌 → 极光背景 → 玻璃基类 → 布局壳 → Element Plus 覆盖
+   ============================================================ */
+
+:root {
+	/* 正文可读性（硬性规则见 CLAUDE.md）：常规正文不小于 20px，
+	   Element Plus 基础字号随之抬高（button/table/tabs/empty/表单标签等默认消费此变量） */
+	--el-font-size-base: 20px;
+	--glass-blur: 22px;
+	--glass-bg: rgba(255, 255, 255, 0.5);
+	--glass-bg-soft: rgba(255, 255, 255, 0.42);
+	--glass-bg-strong: rgba(255, 255, 255, 0.74);
+	--glass-border: rgba(255, 255, 255, 0.68);
+	--glass-border-soft: rgba(255, 255, 255, 0.55);
+	--glass-shadow: 0 8px 32px rgba(80, 63, 205, 0.1);
+	--glass-shadow-lift: 0 12px 40px rgba(80, 63, 205, 0.16);
+	--accent-a: #6366f1;
+	--accent-b: #a855f7;
+	--accent-c: #38bdf8;
+	--text-main: #1d1d2b;
+	--text-sub: #5d5d78;
+	--hairline: rgba(120, 120, 160, 0.18);
+
+	/* 表格固定列的「实底复刻」：把 body 渐变 + 四个极光斑按原配方画成不透明背景。
+	   换算要点（改 body 背景或极光时必须同步重算这里）：
+	   - 光斑中心 = 所属伪元素盒（62vw²）的百分比定位换算成视口坐标：
+	     ::before 盒(-12vw,-22vw) → 靛(6.6vw,-3.4vw)、青(31.4vw,21.4vw)；
+	     ::after 盒(52vw,100vh-36vw) → 粉(76.8vw,100vh-11.2vw)、紫(89.2vw,100vh-23.6vw)
+	   - 半径 = 透明终点% × 中心到盒最远角的距离（farthest-corner），不是盒边长：
+	     靛/青 ≈ 40vw，粉 ≈ 32.6vw，紫 ≈ 37.2vw
+	   - 元素是「组透明度」：先组内叠层、再整体乘 0.6，不能每层各乘。按栈式合成
+	     解出的等效顶层 alpha：粉 0.228 / 紫 0.164 / 靛 0.330 / 天青 0.169
+	   - 颜色预先做 saturate(1.7)（卡片玻璃的 saturate(170%) 作用在「极光×50%白」
+	     复合结果上，与先把光斑饱和再叠 50% 白在数学上等价，故直接烧进渐变色）；
+	     基座渐变的三个停靠色同样预饱和。纯色预饱和会在 255 处截断、略偏品红，
+	     残余偏差 <8/255，肉眼不可辨
+	   - 层序：::after 在 ::before 之上，故粉/紫画在靛/青之上 */
+	--aurora-opaque:
+		radial-gradient(circle 32.6vw at 76.8vw calc(100vh - 11.2vw), rgba(255, 44, 181, 0.242), transparent 100%),
+		radial-gradient(circle 37.2vw at 89.2vw calc(100vh - 23.6vw), rgba(206, 74, 255, 0.164), transparent 100%),
+		radial-gradient(circle 40vw at 6.6vw -3.4vw, rgba(90, 95, 255, 0.33), transparent 100%),
+		radial-gradient(circle 40vw at 31.4vw 21.4vw, rgba(0, 206, 255, 0.169), transparent 100%),
+		linear-gradient(160deg, rgb(225, 241, 255) 0%, rgb(247, 243, 255) 45%, rgb(255, 239, 249) 100%);
+
+	/* Element Plus 文字对比度提升 */
+	--el-text-color-primary: #1d1d2b;
+	--el-text-color-regular: #3d3d52;
+	--el-text-color-secondary: #5d5d78;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	font-size: 20px;
+	font-family:
+		-apple-system,
+		BlinkMacSystemFont,
+		"SF Pro Display",
+		"SF Pro Text",
+		"Segoe UI Variable Display",
+		"Segoe UI",
+		"PingFang SC",
+		"Microsoft YaHei UI",
+		sans-serif;
+	color: var(--text-main);
+	background: linear-gradient(160deg, #e7f0fd 0%, #f6f4ff 45%, #fdf1f7 100%);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+	overflow: hidden;
+}
+
+/* ---------- 背景：缓慢漂移的极光光斑（毛玻璃的"内容"来源） ---------- */
+
+body::before,
+body::after {
+	content: "";
+	position: fixed;
+	z-index: -2;
+	width: 62vw;
+	height: 62vw;
+	border-radius: 50%;
+	filter: blur(90px);
+	opacity: 0.6;
+	pointer-events: none;
+}
+
+body::before {
+	top: -22vw;
+	left: -12vw;
+	background:
+		radial-gradient(circle at 30% 30%, rgba(99, 102, 241, 0.55), transparent 65%),
+		radial-gradient(circle at 70% 70%, rgba(56, 189, 248, 0.42), transparent 65%);
+	animation: drift-a 26s ease-in-out infinite alternate;
+}
+
+body::after {
+	bottom: -26vw;
+	right: -14vw;
+	background:
+		radial-gradient(circle at 40% 40%, rgba(236, 72, 153, 0.38), transparent 62%),
+		radial-gradient(circle at 60% 20%, rgba(168, 85, 247, 0.34), transparent 60%);
+	animation: drift-b 32s ease-in-out infinite alternate;
+}
+
+@keyframes drift-a {
+	to {
+		transform: translate(6vw, 4vh) scale(1.08);
+	}
+}
+
+@keyframes drift-b {
+	to {
+		transform: translate(-5vw, -6vh) scale(1.12);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	body::before,
+	body::after {
+		animation: none;
+	}
+}
+
+/* ---------- 玻璃基类 ---------- */
+
+.glass {
+	background: var(--glass-bg);
+	backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+	-webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+	border: 1px solid var(--glass-border);
+	border-radius: 18px;
+	box-shadow: var(--glass-shadow);
+}
+
+/* ---------- 布局壳 ---------- */
+
+.shell {
+	height: 100%;
+}
+
+.aside {
+	display: flex;
+	flex-direction: column;
+	background: var(--glass-bg-soft);
+	backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+	-webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+	border-right: 1px solid var(--glass-border-soft);
+}
+
+.brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 20px 20px 14px;
+	font-weight: 700;
+	font-size: 20px;
+	letter-spacing: 0.3px;
+}
+
+.brand .logo {
+	width: 26px;
+	height: 26px;
+	border-radius: 8px;
+	/* 公司 Logo：黑底红星，自带边距，按圆角图标块整幅呈现 */
+	background: url("/logo.png") center / cover no-repeat;
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+	flex: none;
+}
+
+.brand em {
+	font-style: normal;
+	background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+.menu {
+	border-right: none;
+	flex: 1;
+	background: transparent;
+	padding: 4px 0;
+}
+
+.header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	height: 56px;
+	background: var(--glass-bg-soft);
+	backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+	-webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+	border-bottom: 1px solid var(--glass-border-soft);
+}
+
+.header .title {
+	font-weight: 650;
+	font-size: 20px;
+}
+
+.header .conn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* ---------- 页面工具条 ---------- */
+
+.page-toolbar {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	margin-bottom: 14px;
+	flex-wrap: wrap;
+}
+
+.grow {
+	flex: 1;
+}
+
+.pre-wrap {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.muted {
+	color: var(--text-sub);
+}
+
+/* ---------- 滚动条：悬浮胶囊 ---------- */
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+	background: rgba(120, 120, 160, 0.32);
+	border-radius: 8px;
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background-color: rgba(120, 120, 160, 0.5);
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::selection {
+	background: rgba(99, 102, 241, 0.25);
+}
+
+/* ============================================================
+   Element Plus 覆盖（在 element 样式之后引入，同优先级后者胜）
+   ============================================================ */
+
+/* 卡片：玻璃面板 */
+.el-card {
+	background: var(--glass-bg);
+	backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+	-webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+	border: 1px solid var(--glass-border-soft);
+	border-radius: 18px;
+	box-shadow: var(--glass-shadow);
+	color: var(--text-main);
+	/* 长内容自动换行而非内滚/溢出（路径等无空格长串也能断行），属性可继承给子元素 */
+	overflow-wrap: anywhere;
+}
+
+.el-card__header {
+	border-bottom: 1px solid var(--hairline);
+	font-weight: 600;
+}
+
+/* 侧栏菜单：悬浮胶囊 + 渐变活动态 */
+.el-menu {
+	border-right: none;
+}
+
+.el-menu-item {
+	height: 42px;
+	line-height: 42px;
+	margin: 4px 12px;
+	border-radius: 12px;
+	color: var(--text-main);
+	transition:
+		background-color 0.25s ease,
+		box-shadow 0.25s ease,
+		color 0.25s ease;
+}
+
+.el-menu-item .el-icon {
+	color: inherit;
+}
+
+.el-menu-item:hover {
+	background: rgba(255, 255, 255, 0.55);
+}
+
+.el-menu-item.is-active {
+	background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+	color: #fff;
+	box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35);
+}
+
+/* 标签页：透明行左对齐 + 胶囊活动态（设置/数据/主题页共用） */
+.el-tabs__header {
+	margin: 0 0 14px;
+}
+
+/* 去掉默认通栏底线与滑动指示条，活动态改用胶囊渐变表达 */
+.el-tabs__nav-wrap::after,
+.el-tabs__active-bar {
+	display: none;
+}
+
+.el-tabs__item {
+	height: 36px;
+	line-height: 36px;
+	padding: 0 16px;
+	border-radius: 10px;
+	font-weight: 500;
+	color: var(--text-sub);
+	transition:
+		background-color 0.25s ease,
+		color 0.25s ease,
+		box-shadow 0.25s ease;
+}
+
+.el-tabs__item + .el-tabs__item {
+	margin-left: 4px;
+}
+
+/* 中和 EP 内置「首/尾标签零内边距」（选择器特异性高于上面的 .el-tabs__item，必须同强度覆盖） */
+.el-tabs--top > .el-tabs__header .el-tabs__item:nth-child(2),
+.el-tabs--bottom > .el-tabs__header .el-tabs__item:nth-child(2) {
+	padding-left: 16px;
+}
+
+.el-tabs--top > .el-tabs__header .el-tabs__item:last-child,
+.el-tabs--bottom > .el-tabs__header .el-tabs__item:last-child {
+	padding-right: 16px;
+}
+
+.el-tabs__item:hover {
+	color: var(--text-main);
+	background: rgba(255, 255, 255, 0.55);
+}
+
+.el-tabs__item.is-active,
+.el-tabs__item.is-active:hover {
+	color: #fff;
+	background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+	box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35);
+}
+
+/* 次级切换（radio 按钮组）跟随同一套胶囊语言 */
+.el-radio-button__inner {
+	background: rgba(255, 255, 255, 0.55);
+	border-color: rgba(120, 120, 160, 0.28);
+	box-shadow: none;
+}
+
+.el-radio-button__inner:hover {
+	color: var(--text-main);
+}
+
+.el-radio-button.is-active .el-radio-button__inner {
+	background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+	border-color: transparent;
+	color: #fff;
+	box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+/* 整页玻璃卡：卡内承载 tab 行 + 滚动内容（设置/数据页共用） */
+.page-card {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.page-card > .el-card__body {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 16px 20px 8px;
+}
+
+/* 按钮：大圆角 + 微悬浮 + 主按钮渐变 */
+.el-button {
+	border-radius: 12px;
+	font-weight: 500;
+	transition:
+		transform 0.2s ease,
+		box-shadow 0.2s ease,
+		background-color 0.2s ease,
+		border-color 0.2s ease;
+}
+
+.el-button:not(.is-text):not(.is-link):hover {
+	transform: translateY(-1px);
+}
+
+.el-button--primary {
+	background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+	border: none;
+	box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus {
+	background: linear-gradient(135deg, #818cf8, #c084fc);
+	box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+}
+
+.el-button--primary.is-plain {
+	background: rgba(99, 102, 241, 0.1);
+	border: 1px solid rgba(99, 102, 241, 0.35);
+	box-shadow: none;
+	color: var(--accent-a);
+}
+
+.el-button--primary.is-plain:hover {
+	background: rgba(99, 102, 241, 0.18);
+}
+
+.el-button--success {
+	background: linear-gradient(135deg, #10b981, #34d399);
+	border: none;
+	box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+}
+
+.el-button--success:hover,
+.el-button--success:focus {
+	background: linear-gradient(135deg, #34d399, #6ee7b7);
+}
+
+.el-button--danger.is-plain {
+	background: rgba(239, 68, 68, 0.08);
+	border-color: rgba(239, 68, 68, 0.35);
+}
+
+/* 输入类：半透明 + 聚焦光环 */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+	border-radius: 10px;
+	background-color: rgba(255, 255, 255, 0.55);
+	box-shadow: 0 0 0 1px rgba(120, 120, 160, 0.28) inset;
+}
+
+.el-textarea__inner {
+	border-radius: 12px;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused {
+	box-shadow:
+		0 0 0 1.5px var(--accent-a) inset,
+		0 0 0 4px rgba(99, 102, 241, 0.14) !important;
+}
+
+/* 标签：胶囊 */
+.el-tag {
+	border-radius: 999px;
+}
+
+/* 表格：全透明让卡片玻璃透出来 */
+.el-table {
+	background: transparent;
+	--el-table-bg-color: transparent;
+	--el-table-tr-bg-color: transparent;
+	--el-table-header-bg-color: rgba(255, 255, 255, 0.5);
+	--el-table-header-text-color: #4a4a63;
+	--el-table-row-hover-bg-color: rgba(255, 255, 255, 0.55);
+	--el-table-border-color: var(--hairline);
+	border-radius: 12px;
+}
+
+.el-table th.el-table__cell {
+	backdrop-filter: blur(8px);
+	font-weight: 600;
+}
+
+/* 右侧固定列（sticky 悬浮）：横向滚动时必须遮住下层内容，不能用透明/半透明。
+   普通列的底是「卡片 50% 白玻璃叠页面极光」的动态半透明画面，任何纯色实底都会与它割裂，
+   故按同一配方画一份不透明复刻（--aurora-opaque + 50% 白），并用 background-attachment: fixed
+   对齐视口——每个单元格显示其所在位置的画面，拼出来与普通列视觉一致。
+   选择器刻意叠加类名抬高优先级，压过 EP 的 background:inherit / 斑马纹 / hover 规则 */
+.el-table .el-table__body-wrapper tbody tr td.el-table__cell.el-table-fixed-column--right,
+.el-table .el-table__header-wrapper thead tr th.el-table__cell.el-table-fixed-column--right {
+	background-image:
+		linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+		var(--aurora-opaque);
+	background-attachment: fixed;
+}
+
+/* 表头固定列：普通表头在卡片玻璃上还多叠了一层 50% 白（--el-table-header-bg-color），复刻同样多叠一层 */
+.el-table .el-table__header-wrapper thead tr th.el-table__cell.el-table-fixed-column--right {
+	background-image:
+		linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+		linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+		var(--aurora-opaque);
+}
+
+/* 行悬浮：普通行悬浮是玻璃上再叠 55% 白；这里背景已被复刻层占住，改用等价内阴影叠加 */
+.el-table--enable-row-hover .el-table__body tbody tr:hover > td.el-table__cell.el-table-fixed-column--right {
+	box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.55);
+}
+
+/* 弹层：遮罩模糊 + 面板玻璃 */
+.el-overlay {
+	backdrop-filter: blur(10px) saturate(140%);
+	background-color: rgba(30, 30, 60, 0.25);
+}
+
+.el-dialog,
+.el-drawer,
+.el-message-box {
+	background: var(--glass-bg-strong);
+	backdrop-filter: blur(30px) saturate(180%);
+	-webkit-backdrop-filter: blur(30px) saturate(180%);
+	border: 1px solid var(--glass-border);
+	border-radius: 20px;
+	box-shadow: 0 24px 80px rgba(60, 50, 120, 0.25);
+}
+
+.el-drawer {
+	border-radius: 20px 0 0 20px;
+}
+
+.el-message {
+	background: rgba(255, 255, 255, 0.82);
+	backdrop-filter: blur(20px) saturate(160%);
+	border: 1px solid var(--glass-border);
+	border-radius: 14px;
+	box-shadow: var(--glass-shadow-lift);
+}
+
+/* 下拉/浮层（选择器、日期面板等） */
+.el-popper.is-light {
+	background: rgba(255, 255, 255, 0.86);
+	backdrop-filter: blur(24px) saturate(170%);
+	-webkit-backdrop-filter: blur(24px) saturate(170%);
+	border: 1px solid var(--glass-border);
+	border-radius: 14px;
+	box-shadow: var(--glass-shadow-lift);
+}
+
+/* 加载遮罩：融入玻璃 */
+.el-loading-mask {
+	background-color: rgba(255, 255, 255, 0.55);
+	backdrop-filter: blur(4px);
+	border-radius: inherit;
+}
+
+/* 折叠面板（编辑器高级区） */
+.el-collapse {
+	--el-collapse-border-color: var(--hairline);
+	--el-collapse-header-bg-color: transparent;
+	--el-collapse-content-bg-color: transparent;
+}
+
+/* 描述列表（发布页状态区） */
+.el-descriptions {
+	--el-descriptions-item-bordered-label-background: rgba(255, 255, 255, 0.45);
+}
+
+.el-descriptions__body {
+	background: transparent;
+}
+
+/* 正文 ≥ 20px（硬性规则）：Element Plus 里硬编码 14/12px 的正文承载面定点抬高 */
+.el-input__inner,
+.el-textarea__inner,
+.el-select__wrapper,
+.el-select-dropdown__item,
+.el-dialog__body,
+.el-descriptions__body .el-descriptions__table .el-descriptions__cell,
+.el-collapse-item__header,
+.el-statistic__head,
+.el-message__content,
+.el-message-box__title,
+.el-message-box__message {
+	font-size: 20px;
+}
+
+/* 统计数字（仪表盘） */
+.el-statistic__number {
+	font-weight: 700;
+}
+
+.el-statistic__head {
+	color: var(--text-sub);
+}
+
+/* ---------- 右上角设置弹窗：左菜单右内容 ---------- */
+
+.header .gear-btn {
+	margin-left: 10px;
+	color: var(--text-sub);
+}
+
+.header .gear-btn:hover {
+	color: var(--el-color-primary);
+}
+
+.app-settings-dialog .el-dialog__body {
+	padding-top: 10px;
+}
+
+.app-settings {
+	display: flex;
+	min-height: 420px;
+}
+
+.app-settings-menu {
+	width: 170px;
+	flex: none;
+	border-right: 1px solid var(--hairline);
+	background: transparent;
+}
+
+.app-settings-menu .el-menu-item {
+	height: 44px;
+	line-height: 44px;
+	border-radius: 10px 0 0 10px;
+}
+
+.app-settings-panel {
+	flex: 1;
+	min-width: 0;
+	padding: 4px 4px 4px 20px;
+	overflow-y: auto;
+	max-height: calc(86vh - 140px);
+	display: flex;
+	flex-direction: column;
+}
+
+/* AI 面板：列区撑满并各自内部滚动，底部测试/保存恒定可见 */
+.app-settings-panel .ai-columns {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	align-items: stretch;
+}
+
+.app-settings-panel .ai-provider-list {
+	flex: none;
+	width: 240px;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.app-settings-panel .ai-col {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow-y: auto;
+	border-left: 1px solid var(--hairline);
+	margin-left: 28px;
+	padding-left: 28px;
+}
+
+.app-settings-panel .ai-footer {
+	flex: none;
+	margin-top: 20px;
+}
+
+.app-settings-panel .ai-col-title {
+	font-size: 20px;
+	font-weight: 600;
+	margin-bottom: 12px;
+}
+
+.app-settings-panel .form-tip {
+	margin-left: 10px;
+	font-size: 20px;
+	color: var(--text-sub);
+}
+
+.app-settings-panel .ai-col-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 12px;
+}
+
+.app-settings-panel .ai-col-head .ai-col-title {
+	margin-bottom: 0;
+}
+
+.app-settings-panel .ai-col-head-right {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.app-settings-panel .ai-col-head-label {
+	font-size: 20px;
+	color: var(--text-sub);
+	cursor: help;
+}
+
+.app-settings-panel .el-input-number {
+	width: 260px;
+}
+
+.app-settings-panel .ai-provider-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	cursor: pointer;
+	font-size: 15px;
+}
+
+.app-settings-panel .ai-provider-item:hover {
+	background: var(--el-fill-color-light);
+}
+
+.app-settings-panel .ai-provider-item.is-active {
+	background: var(--el-color-primary-light-9);
+	color: var(--el-color-primary);
+	font-weight: 600;
+}
+
+.app-settings-panel .ai-provider-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.app-settings-panel .ai-provider-meta {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: none;
+}
+
+.app-settings-panel .ai-provider-del {
+	color: var(--text-sub);
+}
+
+.app-settings-panel .ai-provider-del:hover {
+	color: var(--el-color-danger);
+}
+
+.app-settings-panel .quick-import {
+	margin-bottom: 16px;
+	padding: 12px 14px;
+	border: 1px dashed var(--hairline);
+	border-radius: 10px;
+}
+
+.app-settings-panel .quick-import-title {
+	font-size: 20px;
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+
+.app-settings-panel .quick-import-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.app-settings-panel .quick-import-result {
+	margin-top: 8px;
+}
+
+.app-settings-panel .quick-import-line {
+	font-size: 20px;
+	color: var(--text-sub);
+	margin: 6px 0 4px;
+}
+
+.app-settings-panel .quick-tag {
+	margin: 0 6px 6px 0;
+	font-family: var(--font-mono, monospace);
+}
+
+.app-settings-panel .test-result {
+	margin: 4px 0 12px;
+	padding: 8px 12px;
+	border-radius: 10px;
+	font-size: 20px;
+	word-break: break-all;
+}
+
+.app-settings-panel .test-result.is-ok {
+	background: var(--el-color-success-light-9);
+	color: var(--el-color-success);
+}
+
+.app-settings-panel .test-result.is-fail {
+	background: var(--el-color-danger-light-9);
+	color: var(--el-color-danger);
+}
+
+.app-settings-panel .actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+}

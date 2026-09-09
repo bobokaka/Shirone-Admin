@@ -1,0 +1,36 @@
+{
+	"name": "@shirone-admin/client",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"type-check": "vue-tsc --noEmit"
+	},
+	"dependencies": {
+		"@codemirror/lang-html": "^6.4.12",
+		"@codemirror/state": "^6.7.4",
+		"@codemirror/view": "^6.43.11",
+		"@element-plus/icons-vue": "^2.3.1",
+		"@iconify-json/fa6-brands": "1.2.6",
+		"@iconify-json/material-symbols": "1.2.88",
+		"@iconify-json/simple-icons": "1.2.93",
+		"@iconify/vue": "^5.0.1",
+		"@shirone-admin/shared": "workspace:*",
+		"codemirror": "^6.0.2",
+		"element-plus": "^2.9.3",
+		"md-editor-v3": "^4.21.0",
+		"pinia": "^2.3.0",
+		"pinyin-pro": "^3.26.0",
+		"prettier": "^3.9.6",
+		"vue": "^3.5.13",
+		"vue-router": "^4.5.0"
+	},
+	"devDependencies": {
+		"@vitejs/plugin-vue": "^5.2.1",
+		"typescript": "^5.7.2",
+		"vite": "^6.0.7",
+		"vue-tsc": "^2.2.0"
+	}
+}
