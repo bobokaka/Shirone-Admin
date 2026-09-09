@@ -96,6 +96,13 @@ pnpm.cmd build                     # client 产物在 client/dist
 
 `node workspace/deploy.mjs`：构建主题 → 压缩 `dist/` → 上传服务器 → 备份旧版 → 解压上线。配置见上表 `DEPLOY_HOST` / `DEPLOY_REMOTE_DIR`。
 
+## 分支与协作
+
+- **<font color="#d93025">⚠️ 维护或贡献前：先写 issue，issue 审核通过后再动代码</font>**
+- 从 `main` 拉取最新代码，基于它创建新分支（如 `feat/xxx`、`fix/xxx`）
+- 开发完成后向 `develop` 发起 PR，由维护者审核合并
+- 提交信息格式：`type(scope): 中文描述`，不超过 30 字，如 `feat(client): 新增导出功能`
+
 ## 上游
 
 基于 [LyraVoid/Shirone](https://github.com/LyraVoid/Shirone) 主题生态构建，上游持续开发中，可在各仓自行跟进合并。
