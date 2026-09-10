@@ -3,13 +3,32 @@ import type { GitStatus, RemoteProbe, RepoTarget } from "@shirone-admin/shared";
 import { ADMIN_DIR, CONTENT_DIR, THEME_DIR, themeConnected } from "../config.js";
 import { ApiError } from "../lib/errors.js";
 
-const git = simpleGit({ baseDir: CONTENT_DIR });
-const gitTheme = simpleGit({ baseDir: THEME_DIR });
+// 句柄按需重建：项目映射热切换（applyProjectPaths）后，下次调用即用新 baseDir
+let contentHandle: SimpleGit | null = null;
+let contentHandleDir = "";
+let themeHandle: SimpleGit | null = null;
+let themeHandleDir = "";
+
+function contentGit(): SimpleGit {
+	if (!contentHandle || contentHandleDir !== CONTENT_DIR) {
+		contentHandle = simpleGit({ baseDir: CONTENT_DIR });
+		contentHandleDir = CONTENT_DIR;
+	}
+	return contentHandle;
+}
+
+function themeGit(): SimpleGit {
+	if (!themeHandle || themeHandleDir !== THEME_DIR) {
+		themeHandle = simpleGit({ baseDir: THEME_DIR });
+		themeHandleDir = THEME_DIR;
+	}
+	return themeHandle;
+}
 
 /** 取目标仓 git 句柄；主题仓未连接时抛 400 */
 function repoGit(repo: RepoTarget) {
 	if (repo === "theme" && !themeConnected()) throw new ApiError(400, "主题仓未连接，无法操作");
-	return repo === "theme" ? gitTheme : git;
+	return repo === "theme" ? themeGit() : contentGit();
 }
 
 /** simple-git StatusResult → 扁平化 GitStatus（两仓共用） */
@@ -33,14 +52,14 @@ function toGitStatus(s: StatusResult): GitStatus {
 }
 
 export async function gitStatus(): Promise<GitStatus> {
-	return toGitStatus(await git.status());
+	return toGitStatus(await contentGit().status());
 }
 
 /** 主题仓全量状态（含变更文件列表）；未连接或非 git 仓时返回 null */
 export async function themeGitStatus(): Promise<GitStatus | null> {
 	if (!themeConnected()) return null;
 	try {
-		return toGitStatus(await gitTheme.status());
+		return toGitStatus(await themeGit().status());
 	} catch {
 		return null;
 	}
@@ -75,7 +94,7 @@ export async function push(repo: RepoTarget, log: string[]): Promise<void> {
 
 export async function remoteConfigured(): Promise<boolean> {
 	try {
-		const remotes = await git.getRemotes(true);
+		const remotes = await contentGit().getRemotes(true);
 		return remotes.length > 0;
 	} catch {
 		return false;
@@ -84,7 +103,7 @@ export async function remoteConfigured(): Promise<boolean> {
 
 /** 内容仓最近提交（作者日期 ISO + subject），供 AI 提交信息/时间线起草作上下文 */
 export async function recentCommits(limit = 12): Promise<Array<{ hash: string; date: string; subject: string }>> {
-	const r = await git.log({
+	const r = await contentGit().log({
 		maxCount: limit,
 		format: { hash: "%h", date: "%as", subject: "%s" },
 	});
@@ -153,7 +172,7 @@ export async function recentChanges(
 	limit = 30,
 ): Promise<Array<{ repo: string; commits: CommitChange[] }>> {
 	const result: Array<{ repo: string; commits: CommitChange[] }> = [];
-	result.push({ repo: "内容仓", commits: await commitChangesOf(git, limit) });
+	result.push({ repo: "内容仓", commits: await commitChangesOf(contentGit(), limit) });
 	for (const [name, dir] of [
 		["主题仓", THEME_DIR],
 		["Admin仓", ADMIN_DIR],
@@ -212,7 +231,7 @@ export async function themeRecentCommits(
 ): Promise<Array<{ hash: string; date: string; subject: string }>> {
 	if (!themeConnected()) return [];
 	try {
-		const r = await gitTheme.log({
+		const r = await themeGit().log({
 			maxCount: limit,
 			format: { hash: "%h", date: "%as", subject: "%s" },
 		});

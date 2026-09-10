@@ -80,6 +80,56 @@ export interface SystemStatus {
 	git: GitStatus | null;
 }
 
+/* ---------- 项目映射（内容仓/主题仓磁盘目录配置） ---------- */
+
+/** 目录候选（AI 裁决或启发式扫描） */
+export interface DirCandidate {
+	path: string;
+	/** 0-1 置信度 */
+	confidence: number;
+	/** 中文理由 */
+	reason: string;
+	/** ai = LLM 裁决；heuristic = 特征文件扫描 */
+	source: "ai" | "heuristic";
+}
+
+export interface DirDetectResult {
+	contentCandidates: DirCandidate[];
+	themeCandidates: DirCandidate[];
+	/** AI 是否参与裁决（未配置/未启用/失败时回退纯启发式） */
+	aiUsed: boolean;
+	/** AI 已配置但调用失败的原因（此时仍返回启发式结果） */
+	aiError?: string;
+	scannedDirs: number;
+	elapsedMs: number;
+}
+
+export interface ProjectMappingStatus {
+	contentDir: string;
+	themeDir: string;
+	/** workspace 相对默认路径（「恢复默认」回填用） */
+	defaultContentDir: string;
+	defaultThemeDir: string;
+	/** 当前是否偏离默认 */
+	contentCustom: boolean;
+	themeCustom: boolean;
+	contentConnected: boolean;
+	themeConnected: boolean;
+	themeDepsInstalled: boolean;
+	/** AI 已启用且配置完整（「AI 查找」入口提示用） */
+	aiEnabled: boolean;
+}
+
+export interface ProjectMappingSaveResult extends ProjectMappingStatus {
+	/** 非阻断警示（目录缺失/特征不匹配等） */
+	warnings: string[];
+}
+
+export interface FolderPickResult {
+	canceled: boolean;
+	folder?: string;
+}
+
 export interface CreatePostInput {
 	title: string;
 	slug?: string;

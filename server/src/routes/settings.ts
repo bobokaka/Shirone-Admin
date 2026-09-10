@@ -11,21 +11,25 @@ import { flattenPatches, patchYaml, readYaml } from "../lib/yamlPatch.js";
  * 主题默认 favicon（src/constants/icon.ts）。内容仓 favicon 为空时的实际生效图标，
  * 只作只读预览提示带回给 client，绝不写回内容仓 yaml（保持最小化覆盖）。
  */
-let themeFaviconCache: { src: string; theme: string }[] | null = null;
+// 缓存记录来源路径：项目映射热切换后（THEME_FAVICON_TS 变化）自动失效重取
+let themeFaviconCache: { path: string; list: { src: string; theme: string }[] } | null = null;
 
 async function themeFaviconDefaults(): Promise<{ src: string; theme: string }[]> {
-	if (themeFaviconCache) return themeFaviconCache;
+	if (themeFaviconCache?.path === THEME_FAVICON_TS) return themeFaviconCache.list;
 	try {
 		// server 经 tsx 直跑，可即时加载主题 TS 源（该文件仅含类型导入，无运行时依赖）
 		const mod = (await import(pathToFileURL(THEME_FAVICON_TS).href)) as {
 			defaultFavicons?: { src: string; theme?: string }[];
 		};
-		themeFaviconCache = (mod.defaultFavicons ?? []).map((f) => ({ src: f.src, theme: f.theme ?? "" }));
+		themeFaviconCache = {
+			path: THEME_FAVICON_TS,
+			list: (mod.defaultFavicons ?? []).map((f) => ({ src: f.src, theme: f.theme ?? "" })),
+		};
 	} catch {
 		// 主题升级改动了文件位置时静默降级为空列表，不影响站点配置读写
-		themeFaviconCache = [];
+		themeFaviconCache = { path: THEME_FAVICON_TS, list: [] };
 	}
-	return themeFaviconCache;
+	return themeFaviconCache.list;
 }
 
 const THEME_STYLES = [

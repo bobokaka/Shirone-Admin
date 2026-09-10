@@ -72,7 +72,9 @@ await app.register(importRoutes);
 await fs.mkdir(ASSETS_DIR, { recursive: true });
 await fs.mkdir(PUBLIC_DIR, { recursive: true });
 // 只取 sendFile 能力，路由自己挂：内容仓（覆盖层）优先，未命中回退主题仓（默认层），
-// 与 content:sync 物化语义一致——头像、favicon 等引用主题自带资源时文件并不在内容仓
+// 与 content:sync 物化语义一致——头像、favicon 等引用主题自带资源时文件并不在内容仓。
+// 注册时的 root 只是默认值（serve:false 下从不参与），实际根目录由下方路由显式传入，
+// 勿依赖此处的启动期快照。
 await app.register(fastifyStatic, { root: ASSETS_DIR, serve: false });
 
 function resolveWithin(root: string, rel: string): string | null {
@@ -80,17 +82,18 @@ function resolveWithin(root: string, rel: string): string | null {
 	return full.startsWith(root + path.sep) ? full : null;
 }
 
-const previewMounts: { prefix: string; roots: string[] }[] = [
-	{ prefix: "/content-assets", roots: [ASSETS_DIR, THEME_ASSETS_DIR] },
-	{ prefix: "/content-public", roots: [PUBLIC_DIR, THEME_PUBLIC_DIR] },
+// roots 为请求时求值的闭包：项目映射热切换后预览跟随新目录
+const previewMounts: { prefix: string; roots: () => string[] }[] = [
+	{ prefix: "/content-assets", roots: () => [ASSETS_DIR, THEME_ASSETS_DIR] },
+	{ prefix: "/content-public", roots: () => [PUBLIC_DIR, THEME_PUBLIC_DIR] },
 	// 文章同目录图片（导入向导转换步预览 ./images/… 用）
-	{ prefix: "/content-posts", roots: [POSTS_DIR] },
+	{ prefix: "/content-posts", roots: () => [POSTS_DIR] },
 ];
 
 for (const { prefix, roots } of previewMounts) {
 	app.get(`${prefix}/*`, async (req, reply) => {
 		const rel = (req.params as Record<string, string>)["*"] ?? "";
-		for (const root of roots) {
+		for (const root of roots()) {
 			const full = resolveWithin(root, rel);
 			if (full && existsSync(full) && statSync(full).isFile()) {
 				return reply.sendFile(rel, root);
