@@ -7,6 +7,8 @@ import type {
 	CreatePostInput,
 	DataItem,
 	DataKind,
+	DirDetectResult,
+	FolderPickResult,
 	FooterSettings,
 	GitStatus,
 	JianshuArchiveSummary,
@@ -24,6 +26,8 @@ import type {
 	NavBarLink,
 	PostFile,
 	PostMeta,
+	ProjectMappingSaveResult,
+	ProjectMappingStatus,
 	ProfileSettings,
 	PublishPreview,
 	PublishResult,
@@ -51,6 +55,14 @@ export const systemApi = {
 	previewStop: () => api.post<{ stopped: boolean }>("/api/preview/stop"),
 	previewStatus: () =>
 		api.get<{ running: boolean; ready: boolean; procs: string[] }>("/api/preview/status"),
+	/** 项目映射：内容仓/主题仓目录（保存后热生效） */
+	mapping: () => api.get<ProjectMappingStatus>("/api/system/mapping"),
+	saveMapping: (input: { contentDir?: string | null; themeDir?: string | null }) =>
+		api.put<ProjectMappingSaveResult>("/api/system/mapping", input),
+	/** 系统文件夹选择对话框（Windows）；取消返回 canceled */
+	pickFolder: (title?: string) => api.post<FolderPickResult>("/api/system/pick-folder", { title }),
+	/** 目录探测：特征扫描 + AI 裁决（AI 未配置/失败回退扫描） */
+	detectDirs: () => api.post<DirDetectResult>("/api/system/detect-dirs", {}),
 };
 
 export const postApi = {
