@@ -820,3 +820,58 @@ body::after {
 	justify-content: flex-end;
 	gap: 10px;
 }
+
+/* 项目映射面板：两仓并排卡片 */
+.app-settings-panel .mapping-columns {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 20px;
+	align-content: start;
+	flex: 1;
+}
+
+.app-settings-panel .mapping-card {
+	border: 1px solid var(--hairline);
+	border-radius: 12px;
+	padding: 14px 16px;
+}
+
+.app-settings-panel .mapping-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.app-settings-panel .mapping-title {
+	font-size: 20px;
+	font-weight: 600;
+}
+
+.app-settings-panel .mapping-sub {
+	display: block;
+	font-size: 20px;
+	font-weight: 400;
+	color: var(--text-sub);
+	margin-top: 2px;
+}
+
+.app-settings-panel .mapping-ops {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.app-settings-panel .mapping-foot {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 12px;
+}
+
+.app-settings-panel .mapping-note {
+	font-size: 20px;
+	color: var(--text-sub);
+}

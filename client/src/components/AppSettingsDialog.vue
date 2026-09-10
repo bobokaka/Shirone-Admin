@@ -1,20 +1,22 @@
 <script setup lang="ts">
 	import { computed, nextTick, reactive, ref, watch } from "vue";
 	import { ElMessage, ElMessageBox } from "element-plus";
-	import type { AiProviderConfig, AiSettings, AiTestResult } from "@shirone-admin/shared";
-	import { aiApi } from "../api";
+	import { Icon } from "@iconify/vue";
+	import type { AiProviderConfig, AiSettings, AiTestResult, ProjectMappingStatus } from "@shirone-admin/shared";
+	import { aiApi, systemApi } from "../api";
 	import { useSystemStore } from "../stores/system";
 	import { parseAiEnvImport, type AiImportResult } from "../utils/aiImport";
+	import DirDetectDialog from "./DirDetectDialog.vue";
 
 	/**
 	 * 右上角齿轮打开的全局设置弹窗：左侧菜单 + 右侧内容。
-	 * 面板按 section 扩展，首个面板为 AI 助手（多套服务商配置，Anthropic / OpenAI 兼容）。
+	 * 面板按 section 扩展：AI 助手、项目映射（两仓磁盘目录）、关于。
 	 */
 
 	const visible = defineModel<boolean>({ default: false });
 	const sys = useSystemStore();
 
-	type Section = "ai" | "about";
+	type Section = "ai" | "mapping" | "about";
 	const section = ref<Section>("ai");
 
 	const loading = ref(false);
@@ -43,6 +45,7 @@
 		if (!open) return;
 		testResult.value = null;
 		loadSettings();
+		void loadMapping();
 	});
 
 	async function loadSettings(): Promise<void> {
@@ -182,6 +185,69 @@
 			testing.value = false;
 		}
 	}
+
+	/* ---------- 项目映射（内容仓/主题仓磁盘目录，保存后热生效）---------- */
+
+	const mapping = ref<ProjectMappingStatus | null>(null);
+	const mappingForm = ref({ contentDir: "", themeDir: "" });
+	const mappingSaving = ref(false);
+	const picking = ref("");
+	const detectVisible = reactive({ content: false, theme: false });
+
+	async function loadMapping(): Promise<void> {
+		try {
+			const r = await systemApi.mapping();
+			mapping.value = r;
+			mappingForm.value = { contentDir: r.contentDir, themeDir: r.themeDir };
+		} catch (e) {
+			ElMessage.error((e as Error).message);
+		}
+	}
+
+	async function browseMapping(repo: "content" | "theme"): Promise<void> {
+		if (picking.value) return;
+		picking.value = repo;
+		try {
+			const r = await systemApi.pickFolder(
+				repo === "content" ? "选择内容仓目录（Shirone-Content）" : "选择主题仓目录（Shirone）",
+			);
+			if (!r.canceled && r.folder) {
+				if (repo === "content") mappingForm.value.contentDir = r.folder;
+				else mappingForm.value.themeDir = r.folder;
+			}
+		} catch (e) {
+			ElMessage.error((e as Error).message);
+		} finally {
+			picking.value = "";
+		}
+	}
+
+	function resetMappingDefault(repo: "content" | "theme"): void {
+		if (!mapping.value) return;
+		if (repo === "content") mappingForm.value.contentDir = mapping.value.defaultContentDir;
+		else mappingForm.value.themeDir = mapping.value.defaultThemeDir;
+	}
+
+	async function saveMapping(repo: "content" | "theme"): Promise<void> {
+		if (mappingSaving.value) return;
+		mappingSaving.value = true;
+		try {
+			const r =
+				repo === "content"
+					? await systemApi.saveMapping({ contentDir: mappingForm.value.contentDir.trim() || null })
+					: await systemApi.saveMapping({ themeDir: mappingForm.value.themeDir.trim() || null });
+			mapping.value = r;
+			mappingForm.value = { contentDir: r.contentDir, themeDir: r.themeDir };
+			// 全局状态里的两仓路径已变，刷新给「关于」等展示用
+			void sys.refresh();
+			ElMessage.success("映射已保存并生效");
+			if (r.warnings.length > 0) ElMessage.warning(r.warnings.join("；"));
+		} catch (e) {
+			ElMessage.error((e as Error).message);
+		} finally {
+			mappingSaving.value = false;
+		}
+	}
 </script>
 
 <template>
@@ -202,6 +268,10 @@
 				<el-menu-item index="ai">
 					<el-icon><MagicStick /></el-icon>
 					<span>AI助手</span>
+				</el-menu-item>
+				<el-menu-item index="mapping">
+					<el-icon><FolderOpened /></el-icon>
+					<span>项目映射</span>
 				</el-menu-item>
 				<el-menu-item index="about">
 					<el-icon><InfoFilled /></el-icon>
@@ -382,6 +452,68 @@
 								测试连接
 							</el-button>
 							<el-button type="primary" :loading="saving" @click="save">保存</el-button>
+						</div>
+					</div>
+				</template>
+
+				<!-- 项目映射 -->
+				<template v-else-if="section === 'mapping'">
+					<div class="mapping-columns">
+						<div class="mapping-card">
+							<div class="mapping-head">
+								<div class="mapping-title">
+									内容仓
+									<span class="mapping-sub">Shirone-Content，文章与媒体写入目标</span>
+								</div>
+								<el-tag v-if="mapping?.contentConnected" type="success" effect="plain">已连接</el-tag>
+								<el-tag v-else type="danger" effect="plain">未连接</el-tag>
+							</div>
+							<el-input v-model="mappingForm.contentDir" placeholder="绝对路径，如 D:\blogs\Shirone-Content" clearable />
+							<div class="mapping-ops">
+								<el-button plain :loading="picking === 'content'" @click="browseMapping('content')">浏览…</el-button>
+								<el-button plain @click="detectVisible.content = true">
+									<el-icon><Icon icon="material-symbols:auto-awesome" /></el-icon>AI 查找
+								</el-button>
+								<el-button text @click="resetMappingDefault('content')">恢复默认</el-button>
+							</div>
+							<div class="mapping-foot">
+								<el-button type="primary" :loading="mappingSaving" @click="saveMapping('content')">保存</el-button>
+								<span v-if="mapping?.contentCustom" class="mapping-note">自定义路径已写入 .env，重启后仍生效</span>
+							</div>
+							<DirDetectDialog
+								v-model="detectVisible.content"
+								target="content"
+								@applied="(p: string) => (mappingForm.contentDir = p)"
+							/>
+						</div>
+
+						<div class="mapping-card">
+							<div class="mapping-head">
+								<div class="mapping-title">
+									主题仓
+									<span class="mapping-sub">Shirone，校验与真站预览用</span>
+								</div>
+								<el-tag v-if="mapping?.themeConnected && mapping?.themeDepsInstalled" type="success" effect="plain">已连接</el-tag>
+								<el-tag v-else-if="mapping?.themeConnected" type="warning" effect="plain">依赖未装</el-tag>
+								<el-tag v-else type="danger" effect="plain">未连接</el-tag>
+							</div>
+							<el-input v-model="mappingForm.themeDir" placeholder="绝对路径，如 D:\blogs\Shirone" clearable />
+							<div class="mapping-ops">
+								<el-button plain :loading="picking === 'theme'" @click="browseMapping('theme')">浏览…</el-button>
+								<el-button plain @click="detectVisible.theme = true">
+									<el-icon><Icon icon="material-symbols:auto-awesome" /></el-icon>AI 查找
+								</el-button>
+								<el-button text @click="resetMappingDefault('theme')">恢复默认</el-button>
+							</div>
+							<div class="mapping-foot">
+								<el-button type="primary" :loading="mappingSaving" @click="saveMapping('theme')">保存</el-button>
+								<span v-if="mapping?.themeCustom" class="mapping-note">自定义路径已写入 .env，重启后仍生效</span>
+							</div>
+							<DirDetectDialog
+								v-model="detectVisible.theme"
+								target="theme"
+								@applied="(p: string) => (mappingForm.themeDir = p)"
+							/>
 						</div>
 					</div>
 				</template>
