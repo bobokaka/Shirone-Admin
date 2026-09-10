@@ -214,6 +214,7 @@
 			if (!r.canceled && r.folder) {
 				if (repo === "content") mappingForm.value.contentDir = r.folder;
 				else mappingForm.value.themeDir = r.folder;
+				void saveMapping(repo);
 			}
 		} catch (e) {
 			ElMessage.error((e as Error).message);
@@ -222,10 +223,19 @@
 		}
 	}
 
-	function resetMappingDefault(repo: "content" | "theme"): void {
-		if (!mapping.value) return;
-		if (repo === "content") mappingForm.value.contentDir = mapping.value.defaultContentDir;
-		else mappingForm.value.themeDir = mapping.value.defaultThemeDir;
+	/** 输入框回车/失焦即保存：值为空或与当前一致不动作 */
+	function commitMapping(repo: "content" | "theme"): void {
+		const value = repo === "content" ? mappingForm.value.contentDir : mappingForm.value.themeDir;
+		const current = repo === "content" ? mapping.value?.contentDir : mapping.value?.themeDir;
+		if (!value.trim() || value.trim() === current) return;
+		void saveMapping(repo);
+	}
+
+	/** AI 候选应用即保存 */
+	function applyDetected(repo: "content" | "theme", path: string): void {
+		if (repo === "content") mappingForm.value.contentDir = path;
+		else mappingForm.value.themeDir = path;
+		void saveMapping(repo);
 	}
 
 	async function saveMapping(repo: "content" | "theme"): Promise<void> {
@@ -234,13 +244,12 @@
 		try {
 			const r =
 				repo === "content"
-					? await systemApi.saveMapping({ contentDir: mappingForm.value.contentDir.trim() || null })
-					: await systemApi.saveMapping({ themeDir: mappingForm.value.themeDir.trim() || null });
+					? await systemApi.saveMapping({ contentDir: mappingForm.value.contentDir.trim() })
+					: await systemApi.saveMapping({ themeDir: mappingForm.value.themeDir.trim() });
 			mapping.value = r;
 			mappingForm.value = { contentDir: r.contentDir, themeDir: r.themeDir };
 			// 全局状态里的两仓路径已变，刷新给「关于」等展示用
 			void sys.refresh();
-			ElMessage.success("映射已保存并生效");
 			if (r.warnings.length > 0) ElMessage.warning(r.warnings.join("；"));
 		} catch (e) {
 			ElMessage.error((e as Error).message);
@@ -468,22 +477,23 @@
 								<el-tag v-if="mapping?.contentConnected" type="success" effect="plain">已连接</el-tag>
 								<el-tag v-else type="danger" effect="plain">未连接</el-tag>
 							</div>
-							<el-input v-model="mappingForm.contentDir" placeholder="绝对路径，如 D:\blogs\Shirone-Content" clearable />
+							<el-input
+								v-model="mappingForm.contentDir"
+								placeholder="绝对路径，编辑后自动保存"
+								clearable
+								@keyup.enter="commitMapping('content')"
+								@blur="commitMapping('content')"
+							/>
 							<div class="mapping-ops">
 								<el-button plain :loading="picking === 'content'" @click="browseMapping('content')">浏览…</el-button>
 								<el-button plain @click="detectVisible.content = true">
 									<el-icon><Icon icon="material-symbols:auto-awesome" /></el-icon>AI 查找
 								</el-button>
-								<el-button text @click="resetMappingDefault('content')">恢复默认</el-button>
-							</div>
-							<div class="mapping-foot">
-								<el-button type="primary" :loading="mappingSaving" @click="saveMapping('content')">保存</el-button>
-								<span v-if="mapping?.contentCustom" class="mapping-note">自定义路径已写入 .env，重启后仍生效</span>
 							</div>
 							<DirDetectDialog
 								v-model="detectVisible.content"
 								target="content"
-								@applied="(p: string) => (mappingForm.contentDir = p)"
+								@applied="(p: string) => applyDetected('content', p)"
 							/>
 						</div>
 
@@ -497,22 +507,23 @@
 								<el-tag v-else-if="mapping?.themeConnected" type="warning" effect="plain">依赖未装</el-tag>
 								<el-tag v-else type="danger" effect="plain">未连接</el-tag>
 							</div>
-							<el-input v-model="mappingForm.themeDir" placeholder="绝对路径，如 D:\blogs\Shirone" clearable />
+							<el-input
+								v-model="mappingForm.themeDir"
+								placeholder="绝对路径，编辑后自动保存"
+								clearable
+								@keyup.enter="commitMapping('theme')"
+								@blur="commitMapping('theme')"
+							/>
 							<div class="mapping-ops">
 								<el-button plain :loading="picking === 'theme'" @click="browseMapping('theme')">浏览…</el-button>
 								<el-button plain @click="detectVisible.theme = true">
 									<el-icon><Icon icon="material-symbols:auto-awesome" /></el-icon>AI 查找
 								</el-button>
-								<el-button text @click="resetMappingDefault('theme')">恢复默认</el-button>
-							</div>
-							<div class="mapping-foot">
-								<el-button type="primary" :loading="mappingSaving" @click="saveMapping('theme')">保存</el-button>
-								<span v-if="mapping?.themeCustom" class="mapping-note">自定义路径已写入 .env，重启后仍生效</span>
 							</div>
 							<DirDetectDialog
 								v-model="detectVisible.theme"
 								target="theme"
-								@applied="(p: string) => (mappingForm.themeDir = p)"
+								@applied="(p: string) => applyDetected('theme', p)"
 							/>
 						</div>
 					</div>

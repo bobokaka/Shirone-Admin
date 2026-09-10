@@ -863,15 +863,3 @@ body::after {
 	gap: 8px;
 	margin-top: 10px;
 }
-
-.app-settings-panel .mapping-foot {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	margin-top: 12px;
-}
-
-.app-settings-panel .mapping-note {
-	font-size: 20px;
-	color: var(--text-sub);
-}
