@@ -15,6 +15,8 @@
 	const catError = ref(false);
 	/** 文章拖拽悬停的分类节点值（放置高亮；全树共享同上） */
 	const droppingCat = ref<string | null>(null);
+	/** 折叠中的节点键（全树共享 UI 态）：存独立集合而非 NavBarLink 对象，避免触发深层 watch 的自动保存 */
+	const collapsedKeys = ref<Set<string>>(new Set());
 
 	interface EditDraft {
 		kind: "preset" | "group" | "link";
@@ -102,6 +104,32 @@
 	const realCategories = computed(() =>
 		(props.categories ?? []).filter((c) => c.value !== UNCATEGORIZED),
 	);
+
+	/* ---------- 展开 / 收起（分组子列表与 Categories 分类树） ---------- */
+
+	/** 折叠态节点的稳定键（Categories 预设用固定哨兵，分组按名） */
+	function collapseKeyOf(item: NavBarLink): string {
+		return isCategoriesNode(item) ? "preset:Categories" : `group:${item.name ?? ""}`;
+	}
+
+	/** 行是否可展开：分组有子项 / Categories 预设下挂真实分类 */
+	function isExpandable(item: NavBarLink): boolean {
+		if (isCategoriesNode(item)) return realCategories.value.length > 0;
+		return kindOf(item) === "group" && Boolean(item.children?.length);
+	}
+
+	function isCollapsed(item: NavBarLink): boolean {
+		return collapsedKeys.value.has(collapseKeyOf(item));
+	}
+
+	/** 整体替换集合保证响应式（Set 原地变更不会被 ref 感知） */
+	function toggleCollapse(item: NavBarLink): void {
+		const key = collapseKeyOf(item);
+		const next = new Set(collapsedKeys.value);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		collapsedKeys.value = next;
+	}
 
 	/** 行点击（行内改名态除外）：交给父级按 url / preset 决定联动 */
 	function onRowClick(item: NavBarLink): void {
@@ -410,7 +438,7 @@
 		{
 			group: { name: "shirone-nav", pull: true, put: true },
 			draggable: ".nav-node",
-			filter: ".nav-row__edit, .nav-sub--cats",
+			filter: ".nav-row__edit, .nav-sub--cats, .nav-row__toggle",
 			animation: 150,
 			emptyInsertThreshold: 12,
 			onAdd(evt) {
@@ -442,6 +470,7 @@
 				@dragleave="onCatDragLeave"
 				@drop="onCatDrop(UNCATEGORIZED, $event)"
 			>
+				<span class="nav-row__toggle-spacer" aria-hidden="true"></span>
 				<DataIcon
 					icon="material-symbols:folder-outline-rounded"
 					:size="20"
@@ -464,6 +493,16 @@
 					]"
 					@click="onRowClick(item)"
 				>
+					<span
+						v-if="isExpandable(item)"
+						class="nav-row__toggle"
+						:class="{ 'is-open': !isCollapsed(item) }"
+						:title="isCollapsed(item) ? '展开子项' : '收起子项'"
+						@click.stop="toggleCollapse(item)"
+					>
+						<el-icon :size="16"><ArrowRight /></el-icon>
+					</span>
+					<span v-else class="nav-row__toggle-spacer" aria-hidden="true"></span>
 					<DataIcon :icon="iconOf(item)" :label="titleOf(item)" :size="20" class="nav-row__icon" />
 					<el-input
 						v-if="isInlineEditing(item)"
@@ -503,8 +542,8 @@
 					</span>
 				</div>
 
-				<!-- 分组：缩进子列表（递归本组件） -->
-				<div v-if="kindOf(item) === 'group' && item.children" class="nav-sub">
+				<!-- 分组：缩进子列表（递归本组件；可折叠） -->
+				<div v-if="kindOf(item) === 'group' && item.children && !isCollapsed(item)" class="nav-sub">
 					<NavBarLinksEditor
 						:links="item.children"
 						:allow-group="false"
@@ -521,7 +560,7 @@
 
 				<!-- Categories 预设：动态虚拟分类子节点（未分类哨兵已置顶，此处仅真实分类） -->
 				<div
-					v-if="isCategoriesNode(item) && realCategories.length"
+					v-if="isCategoriesNode(item) && realCategories.length && !isCollapsed(item)"
 					class="nav-sub nav-sub--cats"
 					@dragover.stop.prevent
 					@drop.stop.prevent
@@ -731,6 +770,33 @@
 	.nav-row .nav-row__icon {
 		flex: none;
 		color: var(--nav-text);
+	}
+	/* 展开收起箭头：行首常驻（折叠朝右、展开旋下）；占位符等宽保持各行图标纵向对齐 */
+	.nav-row__toggle {
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+		margin-left: -4px;
+		border-radius: 5px;
+		color: var(--el-text-color-secondary);
+		cursor: pointer;
+	}
+	.nav-row__toggle:hover {
+		color: var(--nav-text);
+		background: rgba(120, 120, 160, 0.14);
+	}
+	.nav-row__toggle .el-icon {
+		transition: transform 0.15s;
+	}
+	.nav-row__toggle.is-open .el-icon {
+		transform: rotate(90deg);
+	}
+	.nav-row__toggle-spacer {
+		flex: none;
+		width: 16px;
 	}
 	/* 名称与图标同色（预设/分组跟类型色，自定义链接为黑色） */
 	.nav-row__name {
