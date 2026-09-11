@@ -3,7 +3,7 @@
 // 流程：先启动 content:watch 做初始同步，检测到 "Watching" 后再启动 dev
 //       （dev script 自带一次 sync，此时为增量空跑，避免两个 sync 并发写文件竞争）
 //       Admin 与内容同步无依赖，立即并行启动（pnpm dev 会同时拉起 server 与 client）
-// 输出：三端（astro / admin client / admin api）就绪后统一打印一次打开地址；不自动打开浏览器
+// 输出：三端（astro / admin client / admin api）就绪后统一打印一次打开地址（OSC 8 可点击唤起默认浏览器）；不自动打开浏览器
 // 生命周期：Astro 7 的 dev server 可能守护化——dev 进程启动完就退出、server 留在后台。
 //       此时改用 `astro dev logs --follow` 跟随服务日志保持输出可见；
 //       脚本退出（Ctrl+C / 任一进程死亡）统一 `astro dev stop` 收尾，不留孤儿 server。
@@ -61,6 +61,17 @@ const allReady = () => ready.astro && ready.adminApi && ready.adminWeb;
 let announcedAll = false;
 let announcedFallback = false;
 
+// OSC 8 超链接：支持的终端（Windows Terminal / VS Code 等）点击即唤起默认浏览器；管道时退化为裸 URL
+const link = process.stdout.isTTY
+	? (url) => `\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\`
+	: (url) => url;
+
+const printAddresses = () => {
+	console.log(`   博客    ${link("http://localhost:4321/")}`);
+	console.log(`   Admin   ${link("http://localhost:5173/")}`);
+	console.log(`   API     ${link("http://localhost:5175/")}  （Admin 内部使用）`);
+};
+
 const announceAll = () => {
 	if (announcedAll) return;
 	announcedAll = true;
@@ -68,9 +79,7 @@ const announceAll = () => {
 	clearInterval(probeTimer);
 	console.log("");
 	console.log("────────────────  全部就绪 · 打开地址  ────────────────");
-	console.log("   博客    http://localhost:4321/");
-	console.log("   Admin   http://localhost:5173/");
-	console.log("   API     http://localhost:5175/  （Admin 内部使用）");
+	printAddresses();
 	console.log("──────────────────────────────────────────────────────");
 };
 
@@ -84,9 +93,7 @@ setTimeout(() => {
 	announcedFallback = true;
 	console.log("");
 	console.log("─────  打开地址（部分服务可能仍在启动，请查看上方日志）  ─────");
-	console.log("   博客    http://localhost:4321/");
-	console.log("   Admin   http://localhost:5173/");
-	console.log("   API     http://localhost:5175/  （Admin 内部使用）");
+	printAddresses();
 	console.log("──────────────────────────────────────────────────────");
 }, 30_000);
 
