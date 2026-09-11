@@ -35,7 +35,7 @@
 	 * 拖放两套机制解耦：树内移动走 vue-draggable-plus（SortableJS）；
 	 * 外部拖入（文章条目 / 预设卡片，见 PostListView）走原生 HTML5 + 自定义 MIME。
 	 */
-	import { computed, nextTick, onMounted, onUnmounted, ref, type Directive, type Ref } from "vue";
+	import { computed, inject, nextTick, onMounted, onUnmounted, provide, ref, type Directive, type Ref } from "vue";
 	import { ElMessage, ElMessageBox } from "element-plus";
 	import { useDraggable } from "vue-draggable-plus";
 	import DataIcon from "./DataIcon.vue";
@@ -78,7 +78,7 @@
 	}
 
 	function iconOf(item: NavBarLink): string {
-		if (item.preset !== undefined) return navPresetOf(item.preset)?.icon ?? item.icon ?? "";
+		if (item.preset !== undefined) return item.icon || navPresetOf(item.preset)?.icon || "";
 		return item.icon || "material-symbols:link";
 	}
 
@@ -96,7 +96,21 @@
 		return kindOf(item) === "preset" && item.preset === "Categories";
 	}
 
-	/** 未分类哨兵节点（置顶独立展示，不挂在 Categories 下） */
+	/** 置顶虚拟「未分类」节点（仅管理端）：不进 props.links / yaml，页面导航不渲染 */
+	const uncatVirtualNode: NavBarLink = { preset: "Uncategorized" };
+
+	/** 名称锁定预设（标签）：跟随主题默认名，行内不提供改名 */
+	const RENAME_LOCKED_PRESETS = new Set(["Tags"]);
+	function isRenameLocked(item: NavBarLink): boolean {
+		return kindOf(item) === "preset" && RENAME_LOCKED_PRESETS.has(item.preset ?? "");
+	}
+
+	/** 带地址的预设（GitHub 外链）：编辑走弹窗（改地址存为对预设的覆盖） */
+	function isPresetLink(item: NavBarLink): boolean {
+		return kindOf(item) === "preset" && item.preset === "GitHub";
+	}
+
+	/** 未分类哨兵数据（计数来源，供置顶虚拟行展示） */
 	const uncatNode = computed(
 		() => (props.categories ?? []).find((c) => c.value === UNCATEGORIZED) ?? null,
 	);
@@ -162,11 +176,6 @@
 		editingCat.value = null;
 	}
 
-	/** 未分类虚拟节点点击：切换未分类过滤 */
-	function onUncatClick(): void {
-		emit("selectCategory", UNCATEGORIZED);
-	}
-
 	/** 文章拖过分类行：仅认文章 MIME，亮放置高亮；阻断冒泡并熄掉本层导航插入线（落点语义已切换） */
 	function onCatDragOver(value: string, e: DragEvent): void {
 		if (!e.dataTransfer?.types.includes(POST_DROP_MIME)) return;
@@ -206,21 +215,41 @@
 	};
 
 	const editKind = computed<NavKind | null>(() => (editingItem.value ? kindOf(editingItem.value) : null));
-	const editTitle = computed(() => (editKind.value === "group" ? "编辑分组" : "编辑链接"));
-	const dialogVisible = computed(() => editingItem.value !== null && editKind.value !== "preset");
+	/** GitHub 预设编辑态：走弹窗（kindOf 仍是 preset，需单独判定） */
+	const isPresetDialog = computed(
+		() => editingItem.value !== null && isPresetLink(editingItem.value),
+	);
+	const editTitle = computed(() =>
+		editKind.value === "group" ? "编辑分组" : isPresetDialog.value ? "编辑预设链接" : "编辑链接",
+	);
+	const dialogVisible = computed(
+		() => editingItem.value !== null && (editKind.value !== "preset" || isPresetDialog.value),
+	);
 	/** 按类型取非空草稿，模板分支判空交给 computed */
 	const groupDraft = computed(() => (editDraft.value?.kind === "group" ? editDraft.value : null));
 	const linkDraft = computed(() => (editDraft.value?.kind === "link" ? editDraft.value : null));
 	const canApplyEdit = computed(() => Boolean(editDraft.value?.name?.trim()));
 
-	/** 预设项：本行处于行内改名态 */
+	/** 预设项：本行处于行内改名态（GitHub 预设走弹窗，排除） */
 	function isInlineEditing(item: NavBarLink): boolean {
-		return editingItem.value === item && kindOf(item) === "preset";
+		return editingItem.value === item && kindOf(item) === "preset" && !isPresetLink(item);
 	}
 
 	function openEdit(item: NavBarLink): void {
 		editingItem.value = item;
 		if (kindOf(item) === "preset") {
+			// GitHub 预设：弹窗编辑（名称/图标/地址/外链，保存为对预设的覆盖）
+			if (isPresetLink(item)) {
+				const meta = navPresetOf(item.preset);
+				editDraft.value = {
+					kind: "link",
+					name: titleOf(item),
+					icon: item.icon || meta?.icon || "",
+					url: item.url || meta?.url || "",
+					external: item.external ?? true,
+				};
+				return;
+			}
 			// 回显当前显示名（无覆盖时即主题默认名），在默认值上改而非从空值新建
 			inlineName.value = titleOf(item);
 			inlineError.value = false;
@@ -272,6 +301,19 @@
 		const item = editingItem.value;
 		const d = editDraft.value;
 		if (!item || !d || !canApplyEdit.value) return;
+		if (isPresetLink(item)) {
+			// 预设覆盖语义：与主题默认相同的字段不写覆盖，保持跟随主题升级
+			const meta = navPresetOf(item.preset);
+			const name = (d.name ?? "").trim();
+			item.name = name !== presetDefaultOf(item) ? name : undefined;
+			const icon = d.icon ?? "";
+			item.icon = icon !== (meta?.icon ?? "") ? icon : undefined;
+			const url = (d.url ?? "").trim();
+			item.url = url && url !== (meta?.url ?? "") ? url : undefined;
+			item.external = d.external === false ? false : undefined;
+			closeEdit();
+			return;
+		}
 		if (d.name !== undefined) item.name = d.name.trim();
 		if (d.icon !== undefined) item.icon = d.icon;
 		if (d.url !== undefined) item.url = d.url.trim();
@@ -385,7 +427,16 @@
 		dropLineTop.value = null;
 	}
 
-	/** 外部原生拖入释放：解析 JSON，按插入序号落位本层 */
+	/** 预设唯一性（有且只能有一个）：根实例对全树递归查重并提供给递归子层共用 */
+	function presetExistsIn(list: NavBarLink[], preset: string): boolean {
+		return list.some((l) => l.preset === preset || (l.children ? presetExistsIn(l.children, preset) : false));
+	}
+	const checkPreset = (preset: string): boolean => presetExistsIn(props.links, preset);
+	if (props.depth === 0) provide("navHasPreset", checkPreset);
+	const hasPreset =
+		props.depth === 0 ? checkPreset : inject<(preset: string) => boolean>("navHasPreset", () => false);
+
+	/** 外部原生拖入释放：解析 JSON，按插入序号落位本层；预设已存在则拒绝 */
 	function onNavDrop(e: DragEvent): void {
 		const raw = e.dataTransfer?.getData(NAV_DROP_MIME);
 		if (!raw) return;
@@ -395,6 +446,10 @@
 		try {
 			item = JSON.parse(raw) as NavBarLink;
 		} catch {
+			return;
+		}
+		if (item.preset !== undefined && (hasPreset?.(item.preset) ?? false)) {
+			ElMessage.warning(`预设「${navPresetShort(navPresetOf(item.preset)?.label ?? item.preset)}」已在导航中，有且只能有一个`);
 			return;
 		}
 		props.links.splice(insertionIndexAt(e.clientY), 0, item);
@@ -456,30 +511,40 @@
 		@dragleave="onNavDragLeave"
 		@drop="onNavDrop"
 	>
-		<!-- 未分类虚拟节点：置顶于首页之前（不入 yaml、不参与排序；点击过滤、拖入文章=清空分类） -->
-		<div v-if="depth === 0 && uncatNode" class="nav-virtual">
-			<div
-				class="nav-row nav-row--uncat"
-				:class="{
-					'nav-row--active': activeCategory === UNCATEGORIZED,
-					'nav-row--drop': droppingCat === UNCATEGORIZED,
-				}"
-				title="未分类文章；拖入文章即清空其分类"
-				@click="onUncatClick"
-				@dragover="onCatDragOver(UNCATEGORIZED, $event)"
-				@dragleave="onCatDragLeave"
-				@drop="onCatDrop(UNCATEGORIZED, $event)"
-			>
-				<span class="nav-row__toggle-spacer" aria-hidden="true"></span>
-				<DataIcon
-					icon="material-symbols:folder-outline-rounded"
-					:size="20"
-					class="nav-row__icon"
-				/>
-				<span class="nav-row__name">未分类</span>
-				<span class="nav-row__kind">分类</span>
-				<span class="nav-row__count muted">{{ uncatNode.count }}</span>
-			</div>
+		<!-- 置顶虚拟「未分类」节点（仅根实例）：管理端过滤/清分类入口，非 .nav-node ——
+		     不参与排序与拖入插入序号，永不进入 props.links（不写 yaml，页面导航不渲染） -->
+		<div
+			v-if="depth === 0"
+			class="nav-row nav-row--preset nav-row--uncat"
+			:class="{
+				'nav-row--active': activeCategory === UNCATEGORIZED,
+				'nav-row--drop': droppingCat === UNCATEGORIZED,
+			}"
+			title="未分类文章；点击过滤，拖入文章即清空其分类"
+			@click="emit('nodeClick', uncatVirtualNode)"
+			@dragover="onCatDragOver(UNCATEGORIZED, $event)"
+			@dragleave="onCatDragLeave()"
+			@drop="onCatDrop(UNCATEGORIZED, $event)"
+		>
+			<span class="nav-row__toggle-spacer" aria-hidden="true"></span>
+			<DataIcon
+				:icon="navPresetOf('Uncategorized')?.icon ?? 'material-symbols:folder-off-outline-rounded'"
+				label="未分类"
+				:size="20"
+				class="nav-row__icon"
+			/>
+			<span class="nav-row__name">未分类</span>
+			<span class="nav-row__kind">分类</span>
+			<span class="nav-row__ops">
+				<!-- 双占位对齐常规行按钮列（不可见不可点），计数浮于其上随行常显 -->
+				<el-button size="small" circle text class="nav-row__op-hidden" aria-hidden="true" tabindex="-1">
+					<el-icon><Edit /></el-icon>
+				</el-button>
+				<el-button size="small" circle text class="nav-row__op-hidden" aria-hidden="true" tabindex="-1">
+					<el-icon><Close /></el-icon>
+				</el-button>
+				<span class="nav-row__count">{{ uncatNode?.count ?? 0 }}</span>
+			</span>
 		</div>
 
 		<!-- 稳定 key：节点元素与数据条目跨重渲染保持绑定 -->
@@ -533,7 +598,15 @@
 						<el-button size="small" type="primary" @click.stop="commitInlineEdit(item)">保存</el-button>
 					</span>
 					<span v-else class="nav-row__ops">
-						<el-button size="small" circle text @click.stop="openEdit(item)">
+						<!-- 标签预设跟随主题默认名，不可改名（可删除）；
+							     锁定行编辑钮占位隐藏，保持各行徽标列纵向对齐 -->
+						<el-button
+							size="small"
+							circle
+							text
+							:class="{ 'nav-row__op-hidden': isRenameLocked(item) }"
+							@click.stop="openEdit(item)"
+						>
 							<el-icon><Edit /></el-icon>
 						</el-button>
 						<el-button size="small" circle text type="danger" @click.stop="removeItem(i)">
@@ -596,10 +669,9 @@
 							</el-button>
 							<el-button size="small" type="primary" @click.stop="commitCatEdit(c)">保存</el-button>
 						</span>
-						<!-- 操作区常驻占位（未分类不可改名，留空但对齐计数列） -->
+						<!-- 操作区常驻占位（对齐计数列） -->
 						<span v-else class="cat-row__ops">
 							<el-button
-								v-if="c.value !== UNCATEGORIZED"
 								size="small"
 								circle
 								text
@@ -746,13 +818,6 @@
 		/* 链接行名称/图标用黑色，类型感只留左缘条与徽标 */
 		--nav-text: var(--el-text-color-primary);
 	}
-	/* 未分类置顶虚拟节点：靛蓝色系（与选中态同族），悬停即显色 */
-	.nav-row--uncat {
-		--nav-accent: #6366f1;
-		--nav-accent-border: rgba(99, 102, 241, 0.45);
-		--nav-tag-border: rgba(99, 102, 241, 0.6);
-		--nav-text: var(--el-text-color-primary);
-	}
 	.nav-row:hover {
 		border-color: var(--nav-accent-border);
 		background: rgba(255, 255, 255, 0.72);
@@ -842,20 +907,32 @@
 		display: inline-flex;
 		align-items: center;
 		flex: none;
-		opacity: 0;
-		transition: opacity 0.15s;
+		position: relative;
+		/* visibility 而非 opacity：常显元素（未分类计数）可在隐藏父级内单独可见 */
+		visibility: hidden;
 	}
 	.nav-row:hover .nav-row__ops,
 	.nav-row__ops:focus-within {
-		opacity: 1;
+		visibility: visible;
 	}
 	.nav-row__ops .el-button + .el-button {
 		margin-left: 2px;
 	}
-	/* 未分类置顶虚拟节点：徽标后的计数列 */
+	/* 锁定预设的编辑钮占位隐藏：不可见不可点，但保留等宽让徽标列对齐其他行 */
+	.nav-row__op-hidden {
+		visibility: hidden;
+		pointer-events: none;
+	}
+	/* 未分类计数：覆盖在编辑钮占位槽上，不占流宽（徽标列对齐），随行常显 */
 	.nav-row__count {
-		flex: none;
+		position: absolute;
+		left: 0;
+		top: 50%;
+		transform: translateY(-50%);
+		visibility: visible;
+		color: var(--el-text-color-secondary);
 		font-size: calc(20px + var(--font-shift, 0px));
+		line-height: 1;
 	}
 	/* 分类行/未分类节点接收文章拖入：蓝色放置高亮（保留左缘类型条） */
 	.nav-row--drop {

@@ -11,6 +11,8 @@ export interface NavPresetMeta {
 	desc: string;
 	/** 主题内置图标 */
 	icon: string;
+	/** 主题预设自带的默认地址（仅 GitHub 外链有），编辑弹窗回显与「同默认不覆盖」判定用 */
+	url?: string;
 }
 
 export const NAV_PRESETS: NavPresetMeta[] = [
@@ -27,8 +29,16 @@ export const NAV_PRESETS: NavPresetMeta[] = [
 	{ value: "Albums", label: "相册（Albums）", desc: "/albums/ · 图片相册", icon: "material-symbols:photo-library-outline-rounded" },
 	{ value: "Categories", label: "分类（Categories）", desc: "/categories/ · 文章分类索引", icon: "material-symbols:folder-outline-rounded" },
 	{ value: "Tags", label: "标签（Tags）", desc: "/tags/ · 文章标签索引", icon: "material-symbols:tag-rounded" },
+	// Uncategorized 仅作管理端置顶虚拟「未分类」节点的图标/名称来源：
+	// 不进导航配置与预设卡（页面导航不渲染该条目）
+	{
+		value: "Uncategorized",
+		label: "未分类（Uncategorized）",
+		desc: "管理端置顶虚拟节点 · 不进导航配置",
+		icon: "material-symbols:folder-off-outline-rounded",
+	},
 	{ value: "About", label: "关于（About）", desc: "/about/ · 关于本站", icon: "material-symbols:info-outline-rounded" },
-	{ value: "GitHub", label: "GitHub", desc: "主题源码仓库 · 外部链接", icon: "fa6-brands:github" },
+	{ value: "GitHub", label: "GitHub", desc: "主题源码仓库 · 外部链接", icon: "fa6-brands:github", url: "https://github.com/LyraVoid/Shirone" },
 ];
 
 /** 按 preset 值查元数据；未收录返回 null（自定义/拼写错误名） */

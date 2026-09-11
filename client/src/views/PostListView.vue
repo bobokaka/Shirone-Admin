@@ -1,5 +1,5 @@
 <script setup lang="ts">
-	import { computed, nextTick, onMounted, ref, watch } from "vue";
+	import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 	import { useRoute, useRouter } from "vue-router";
 	import { ElMessage, ElMessageBox } from "element-plus";
 	import { MdPreview } from "md-editor-v3";
@@ -39,11 +39,33 @@
 	const presetVisible = ref(false);
 	let navSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
+	/** 冲刷挂起的导航防抖保存：路由离开/页面卸载/重载前调用，防未落盘改动丢失 */
+	function flushNavSave(): void {
+		if (!navSaveTimer) return;
+		clearTimeout(navSaveTimer);
+		navSaveTimer = null;
+		void saveNav();
+	}
+
+	/** 「未分类」不进导航配置（页面导航不渲染）：加载时递归剔除历史遗留的 Uncategorized 预设条目 */
+	function stripUncategorized(list: NavBarLink[]): NavBarLink[] {
+		return list
+			.filter((l) => l.preset !== "Uncategorized")
+			.map((l) => (l.children ? { ...l, children: stripUncategorized(l.children) } : l));
+	}
+
 	async function loadNav(): Promise<void> {
 		try {
+			// 先落盘本地未保存的改动再拉取：防止服务端旧状态覆盖刚编辑的条目
+			// （例：新加预设后 600ms 内任何触发重载的路径会把新增冲掉）
+			if (navSaveTimer) {
+				clearTimeout(navSaveTimer);
+				navSaveTimer = null;
+				await saveNav();
+			}
 			const nav = await settingsApi.getNavbar();
 			navSyncing.value = true;
-			navLinks.value = nav.links ?? [];
+			navLinks.value = stripUncategorized(nav.links ?? []);
 			await nextTick();
 			navLoaded.value = true;
 		} catch (e) {
@@ -93,8 +115,28 @@
 		e.dataTransfer.setData(POST_DROP_MIME, JSON.stringify({ path: p.path }));
 	}
 
-	/** 预设卡拖起即收起弹层，避免遮住导航树 */
+	/** 预设唯一性：弹层里已在导航树中的预设置灰禁拖（全树递归收集） */
+	const presentPresets = computed(() => {
+		const set = new Set<string>();
+		const walk = (list: NavBarLink[]): void => {
+			for (const l of list) {
+				if (l.preset) set.add(l.preset);
+				if (l.children) walk(l.children);
+			}
+		};
+		walk(navLinks.value);
+		return set;
+	});
+
+	/** 预设卡目录：剔除 Uncategorized（管理端置顶虚拟节点专用，不进导航配置与页面渲染） */
+	const presetCatalog = computed(() => NAV_PRESETS.filter((p) => p.value !== "Uncategorized"));
+
+	/** 预设卡拖起即收起弹层，避免遮住导航树；已在导航中的预设不可再拖 */
 	function presetDragStart(preset: string, e: DragEvent): void {
+		if (presentPresets.value.has(preset)) {
+			e.preventDefault();
+			return;
+		}
 		presetVisible.value = false;
 		if (!e.dataTransfer) return;
 		e.dataTransfer.effectAllowed = "copy";
@@ -140,8 +182,12 @@
 		filterCategory.value = value;
 	}
 
-	/** 点击导航行：url 命中文章则定位选中该篇；Categories 预设节点清空分类过滤 */
+	/** 点击导航行：url 命中文章则定位选中该篇；Uncategorized 预设过滤未分类；Categories 预设清空过滤 */
 	function onNavNodeClick(item: NavBarLink): void {
+		if (item.preset === "Uncategorized") {
+			filterCategory.value = UNCATEGORIZED;
+			return;
+		}
 		if (item.url) {
 			const hit = postByUrl.value.get(item.url);
 			if (hit) {
@@ -385,6 +431,13 @@
 	onMounted(() => {
 		void load();
 		void loadNav();
+		window.addEventListener("pagehide", flushNavSave);
+	});
+
+	onUnmounted(() => {
+		window.removeEventListener("pagehide", flushNavSave);
+		// SPA 路由离开（文章页 → 发布页等）同样要冲刷挂起的导航保存
+		flushNavSave();
 	});
 </script>
 
@@ -408,10 +461,12 @@
 										</el-button>
 									</template>
 									<el-row :gutter="8" class="preset-grid">
-										<el-col v-for="p in NAV_PRESETS" :key="p.value" :span="8">
+										<el-col v-for="p in presetCatalog" :key="p.value" :span="8">
 											<div
 												class="preset-card"
-												draggable="true"
+												:class="{ 'is-disabled': presentPresets.has(p.value) }"
+												:draggable="!presentPresets.has(p.value)"
+												:title="presentPresets.has(p.value) ? '已在导航菜单中，有且只能有一个' : undefined"
 												@dragstart="presetDragStart(p.value, $event)"
 											>
 												<DataIcon :icon="p.icon" :label="navPresetShort(p.label)" :size="22" />
@@ -711,6 +766,15 @@
 	}
 	.preset-card:active {
 		cursor: grabbing;
+	}
+	/* 已在导航中的预设：置灰禁拖（有且只能有一个） */
+	.preset-card.is-disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	.preset-card.is-disabled:hover {
+		border-color: var(--hairline);
+		background: rgba(255, 255, 255, 0.55);
 	}
 	.preset-card__name {
 		font-size: 18px;
