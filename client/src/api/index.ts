@@ -117,6 +117,13 @@ export const mediaApi = {
 		api.post<SiteMediaResult>("/api/media/site-image-import", input),
 	/** 站点图片托管目录清单（页脚图片库） */
 	siteImages: (target: string) => api.get<SiteMediaResult[]>(`/api/media/site-images?target=${encodeURIComponent(target)}`),
+	/** 自定义图标图片：写 public/images/icons/；currentSrc 指向同目录时原位替换 */
+	iconImage: (file: File, currentSrc?: string) => {
+		const form = new FormData();
+		if (currentSrc) form.append("currentSrc", currentSrc);
+		form.append("file", file);
+		return api.upload<SiteMediaResult>("/api/media/icon-image", form);
+	},
 	/** 数据条目封面：kind 决定目录；path 为当前值时原位覆盖（替换图片） */
 	dataCover: (kind: DataKind, path: string, file: File) => {
 		const form = new FormData();
