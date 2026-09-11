@@ -13,6 +13,7 @@ import type {
 } from "@shirone-admin/shared";
 import { ASSETS_DIR, MOMENT_IMAGES_DIR, MOMENTS_DIR, POSTS_DIR, PUBLIC_DIR } from "../config.js";
 import { ApiError } from "../lib/errors.js";
+import { removeNavbarPostLinks, syncNavbarPostLinks } from "../lib/navbar-sync.js";
 import { momentId, shanghaiMomentStamp, todayShanghai } from "../lib/datetime.js";
 import { parseFrontmatter, serializeFrontmatter } from "../lib/frontmatter.js";
 import { sanitizeUserSlug, suggestSlug } from "../lib/slug.js";
@@ -140,18 +141,27 @@ function slugOfRel(rel: string): { slug: string; layout: PostMeta["layout"] } {
 	return { slug: norm.replace(/\.mdx?$/i, ""), layout: "file" };
 }
 
+/** 补上文件修改时间（列表展示兜底用，不参与 frontmatter 序列化） */
+async function withMtime(meta: PostMeta, abs: string): Promise<PostMeta> {
+	const st = await fs.stat(abs).catch(() => null);
+	if (st) meta.mtime = shanghaiMomentStamp(st.mtime);
+	return meta;
+}
+
 export async function listPosts(): Promise<PostMeta[]> {
 	const out: PostMeta[] = [];
 	const entries = await fs.readdir(POSTS_DIR, { withFileTypes: true }).catch(() => []);
 	for (const entry of entries) {
 		if (entry.isDirectory()) {
-			const data = await readDoc(path.join(POSTS_DIR, entry.name, "index.md"));
-			if (data) out.push(normPostMeta(data, entry.name, `${entry.name}/index.md`, "directory"));
+			const abs = path.join(POSTS_DIR, entry.name, "index.md");
+			const data = await readDoc(abs);
+			if (data) out.push(await withMtime(normPostMeta(data, entry.name, `${entry.name}/index.md`, "directory"), abs));
 		} else if (entry.isFile() && /\.(md|mdx)$/i.test(entry.name) && !/^index\.md$/i.test(entry.name)) {
 			const rel = entry.name;
-			const data = await readDoc(path.join(POSTS_DIR, entry.name));
+			const abs = path.join(POSTS_DIR, entry.name);
+			const data = await readDoc(abs);
 			if (data) {
-				out.push(normPostMeta(data, slugOfRel(rel).slug, rel, "file"));
+				out.push(await withMtime(normPostMeta(data, slugOfRel(rel).slug, rel, "file"), abs));
 			}
 		}
 	}
@@ -169,7 +179,8 @@ export async function readPost(rel: string): Promise<PostFile> {
 	});
 	const parsed = parseFrontmatter(raw);
 	const { slug, layout } = slugOfRel(rel);
-	return { meta: normPostMeta(parsed.data, slug, rel.replace(/\\/g, "/"), layout), body: parsed.body };
+	const meta = await withMtime(normPostMeta(parsed.data, slug, rel.replace(/\\/g, "/"), layout), abs);
+	return { meta, body: parsed.body };
 }
 
 export async function createPost(input: CreatePostInput): Promise<PostFile> {
@@ -274,6 +285,15 @@ export async function savePost(input: SavePostInput): Promise<PostFile> {
 
 	await fs.mkdir(path.dirname(abs), { recursive: true });
 	await fs.writeFile(abs, serializeFrontmatter(next, POST_ORDER, input.body));
+	await cleanPostImages(slugOfRel(input.path).slug, [input.body, str(next.image)]);
+	// 导航里拖入该文章生成的快照链接跟随改名 / 换 permalink
+	await syncNavbarPostLinks({
+		slug: slugOfRel(input.path).slug,
+		oldTitle: str(existing.data.title),
+		newTitle: str(next.title),
+		oldPermalink: strOrUndef(existing.data.permalink),
+		newPermalink: strOrUndef(next.permalink),
+	});
 	return readPost(input.path);
 }
 
@@ -282,6 +302,7 @@ export async function deletePost(rel: string): Promise<void> {
 	const st = await fs.stat(abs).catch(() => {
 		throw new ApiError(404, `文章不存在：${rel}`);
 	});
+	const doc = await readDoc(st.isDirectory() ? path.join(abs, "index.md") : abs);
 	if (st.isDirectory()) {
 		if (rel.replace(/\\/g, "/").split("/").length !== 1) {
 			throw new ApiError(400, "删除目录形式的文章只能传 slug 顶层目录");
@@ -290,6 +311,7 @@ export async function deletePost(rel: string): Promise<void> {
 	} else {
 		await fs.unlink(abs);
 	}
+	if (doc) await removeNavbarPostLinks(slugOfRel(rel).slug, strOrUndef(doc.permalink));
 }
 
 /* ---------- 说说 ---------- */
@@ -451,13 +473,48 @@ async function resolveSlotFileName(
 	return uniqueFile(dir, opts.newPrefix ? `${opts.newPrefix}-${asciiName(origName)}` : asciiName(origName));
 }
 
+/**
+ * 文章配图统一编号命名 image<N>.<ext>：N 取目录内现有最大编号 +1，
+ * alt 返回 图片<N> 供编辑器插入。wx 原子占位防并行上传撞号。
+ */
 export async function uploadPostImage(slug: string, origName: string, buf: Buffer): Promise<MediaUploadResult> {
 	if (!/^[\w-]+$/.test(slug)) throw new ApiError(400, `slug 不合法：${slug}`);
 	const dir = path.join(POSTS_DIR, slug, "images");
 	await fs.mkdir(dir, { recursive: true });
-	const fileName = await uniqueFile(dir, asciiName(origName));
-	await fs.writeFile(path.join(dir, fileName), buf);
-	return { src: `./images/${fileName}`, fileName };
+	const ext = path.extname(origName).toLowerCase() || ".png";
+	let max = 0;
+	for (const f of await fs.readdir(dir).catch(() => [] as string[])) {
+		const m = /^image(\d+)\.[^.]+$/.exec(f);
+		if (m) max = Math.max(max, Number(m[1]));
+	}
+	let n = max + 1;
+	for (;;) {
+		const fileName = `image${n}${ext}`;
+		try {
+			await fs.writeFile(path.join(dir, fileName), buf, { flag: "wx" });
+			return { src: `./images/${fileName}`, fileName, alt: `图片${n}` };
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+				n += 1;
+				continue;
+			}
+			throw e;
+		}
+	}
+}
+
+/** 保存时清理文章配图目录里不再被正文/封面引用的孤儿图（跳过刚上传的，防插图竞态误删） */
+async function cleanPostImages(slug: string, refs: string[]): Promise<void> {
+	const dir = path.join(POSTS_DIR, slug, "images");
+	const files = await fs.readdir(dir).catch(() => [] as string[]);
+	const now = Date.now();
+	for (const f of files) {
+		if (!IMAGE_EXT.has(path.extname(f).toLowerCase())) continue;
+		if (refs.some((r) => r.includes(f))) continue;
+		const st = await fs.stat(path.join(dir, f)).catch(() => null);
+		if (!st || now - st.mtimeMs < 120_000) continue;
+		await fs.unlink(path.join(dir, f)).catch(() => {});
+	}
 }
 
 export async function uploadMomentImage(batchId: string | undefined, origName: string, buf: Buffer): Promise<MediaUploadResult> {

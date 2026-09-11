@@ -25,6 +25,8 @@ export interface PostMeta {
 	hideHomeContent: boolean;
 	alias?: string;
 	permalink?: string;
+	/** 文件系统修改时间 YYYY-MM-DD HH:mm:ss（只读派生，不回写 frontmatter） */
+	mtime?: string;
 }
 
 export interface PostFile {
@@ -161,6 +163,8 @@ export interface MediaUploadResult {
 	/** frontmatter 里应填的 src（文章配图为相对路径，说说为站点绝对路径） */
 	src: string;
 	fileName: string;
+	/** 插入正文的建议 alt（文章配图为 图片<N>，与文件名编号一致） */
+	alt?: string;
 	batchId?: string;
 }
 
