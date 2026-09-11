@@ -38,6 +38,16 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
 		return storage.listSiteImages(target);
 	});
 
+	// 自定义图标图片：导航菜单 / 数据条目图标字段用，写 public/images/icons/；
+	// currentSrc 为字段当前值，指向托管目录时原位替换旧文件
+	app.post("/api/media/icon-image", async (req) => {
+		const data = await req.file();
+		if (!data) throw new ApiError(400, "缺少文件");
+		const currentSrc = fieldText(data.fields, "currentSrc");
+		const buf = await data.toBuffer();
+		return storage.uploadIconImage(currentSrc, data.filename, buf);
+	});
+
 	// 站点图片：target ∈ banner-desktop | banner-mobile | avatar | favicon；name 为可选固定文件名（favicon 槽位替换）；
 	// currentSrc 为字段当前值，指向同目标托管目录时原位替换旧文件（头像）
 	app.post("/api/media/site-image", async (req) => {

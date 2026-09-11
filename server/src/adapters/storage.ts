@@ -605,6 +605,31 @@ export async function listSiteImages(target: string): Promise<SiteMediaResult[]>
 	});
 }
 
+/* ---------- 自定义图标图片上传（导航菜单 / 数据条目的图标字段）---------- */
+
+const ICON_IMAGE_EXT = new Set([...IMAGE_EXT, ".svg", ".ico"]);
+
+/**
+ * 上传自定义图标图片：落 public/images/icons/（public 原样发布，线上直链可用）。
+ * currentSrc 指向该托管目录内文件时原位替换（沿用文件名，扩展名以新上传为准）。
+ */
+export async function uploadIconImage(
+	currentSrc: string | undefined,
+	origName: string,
+	buf: Buffer,
+): Promise<SiteMediaResult> {
+	const ext = path.extname(origName).toLowerCase();
+	if (!ICON_IMAGE_EXT.has(ext)) throw new ApiError(400, `不支持的图片格式：${ext || "（无扩展名）"}`);
+	const dir = path.join(PUBLIC_DIR, "images", "icons");
+	await fs.mkdir(dir, { recursive: true });
+	const fileName = await resolveSlotFileName(dir, "/images/icons", currentSrc ?? "", origName, {
+		newPrefix: "icon",
+	});
+	await fs.writeFile(path.join(dir, fileName), buf);
+	const rel = `images/icons/${fileName}`;
+	return { src: `/${rel}`, previewUrl: `/content-public/${rel}`, fileName };
+}
+
 /* ---------- 站点横幅壁纸清理（保存配置时物理删除不再引用的本地文件）---------- */
 
 /** 横幅壁纸托管目录的 src 前缀（与 SITE_IMAGE_TARGETS 的 banner 槽位一致） */
