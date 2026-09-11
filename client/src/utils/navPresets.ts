@@ -44,3 +44,10 @@ export function navPresetShort(label: string): string {
 
 /** 导航树外部拖入（文章条目 / 预设卡 → 导航菜单）的自定义 dataTransfer MIME 类型 */
 export const NAV_DROP_MIME = "application/x-shirone-nav";
+
+/** 文章条目专属拖拽（文章列表 → 导航分类节点 = 改文章分类）的 dataTransfer MIME 类型，
+ *  与 NAV_DROP_MIME 同拖并存：落点是导航行则插链接、是分类节点则改分类 */
+export const POST_DROP_MIME = "application/x-shirone-post";
+
+/** 「未分类」虚拟节点的哨兵值（不与真实分类名冲突；拖入其上 = 清空文章分类） */
+export const UNCATEGORIZED = "__uncategorized__";

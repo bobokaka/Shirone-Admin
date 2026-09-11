@@ -4,13 +4,20 @@
 	import { ElMessage, ElMessageBox } from "element-plus";
 	import { MdPreview } from "md-editor-v3";
 	import type { NavBarLink, PostFile, PostMeta } from "@shirone-admin/shared";
-	import { postApi, settingsApi } from "../api";
+	import { postApi, settingsApi, taxonomyApi } from "../api";
 	import { localMediaSanitize, postPreviewBody } from "../utils/content-media";
-	import { NAV_DROP_MIME, NAV_PRESETS, navPresetShort } from "../utils/navPresets";
+	import {
+		NAV_DROP_MIME,
+		NAV_PRESETS,
+		POST_DROP_MIME,
+		UNCATEGORIZED,
+		navPresetShort,
+	} from "../utils/navPresets";
 	import { categoryCardStyle, tagColorStyle } from "../utils/tagColor";
 	import DataIcon from "../components/DataIcon.vue";
 	import NavBarLinksEditor from "../components/NavBarLinksEditor.vue";
 	import PostEditorPanel from "../components/PostEditorPanel.vue";
+	import PreviewPanel from "../components/PreviewPanel.vue";
 	import TaxonomyDialog from "../components/TaxonomyDialog.vue";
 
 	const router = useRouter();
@@ -74,8 +81,8 @@
 		}
 	}
 
-	/** 来源拖拽（原生 HTML5）：dataTransfer 携带自定义 MIME 的 JSON，由导航树各级列表自收
-	 *  （与树内 Sortable 移动完全解耦） */
+	/** 来源拖拽（原生 HTML5）：dataTransfer 携带双 MIME —— 导航 MIME 供树内插入链接，
+	 *  文章 MIME 供分类节点接收改分类（同一拖拽按落点类型分派不同接口） */
 	function postDragStart(p: PostMeta, e: DragEvent): void {
 		if (!e.dataTransfer) return;
 		e.dataTransfer.effectAllowed = "copy";
@@ -83,6 +90,7 @@
 			NAV_DROP_MIME,
 			JSON.stringify({ name: p.title, url: p.permalink || `/posts/${p.slug}/` }),
 		);
+		e.dataTransfer.setData(POST_DROP_MIME, JSON.stringify({ path: p.path }));
 	}
 
 	/** 预设卡拖起即收起弹层，避免遮住导航树 */
@@ -94,9 +102,6 @@
 	}
 
 	/* ---------- 左树 ↔ 右列联动：分类过滤 / 文章定位 ---------- */
-
-	/** 无分类文章在过滤体系里的兜底节点值（不与真实分类名冲突） */
-	const UNCATEGORIZED = "__uncategorized__";
 
 	const categoryOptions = computed(() => {
 		const set = new Map<string, number>();
@@ -129,9 +134,10 @@
 		return p.permalink ? [p.permalink, `/posts/${p.slug}/`] : [`/posts/${p.slug}/`];
 	});
 
-	/** 点击导航分类虚拟节点：切换该分类过滤（再点同分类取消） */
+	/** 点击导航分类虚拟节点：切换该分类过滤（已选中时再点不处理，保持选中） */
 	function onNavCategory(value: string): void {
-		filterCategory.value = filterCategory.value === value ? "" : value;
+		if (filterCategory.value === value) return;
+		filterCategory.value = value;
 	}
 
 	/** 点击导航行：url 命中文章则定位选中该篇；Categories 预设节点清空分类过滤 */
@@ -144,6 +150,40 @@
 			}
 		}
 		if (item.preset === "Categories") filterCategory.value = "";
+	}
+
+	/** 分类节点行内改名：taxonomy 接口改写该分类全部文章，随后刷新列表与计数 */
+	async function onCatRename(from: string, to: string): Promise<void> {
+		try {
+			const r = await taxonomyApi.rename({ kind: "category", from, to });
+			ElMessage.success(`已改写 ${r.changed} 篇文章`);
+			if (filterCategory.value === from) filterCategory.value = to;
+			await load();
+		} catch (e) {
+			ElMessage.error(`重命名失败：${(e as Error).message}`);
+		}
+	}
+
+	/** 文章拖入分类节点：取最新正文后仅改 category 落盘（未分类哨兵 = 清空），
+	 *  就地同步列表与右栏，不整页刷新 */
+	async function onCatAssign(categoryValue: string, postPath: string): Promise<void> {
+		const target = categoryValue === UNCATEGORIZED ? "" : categoryValue;
+		const p = posts.value.find((x) => x.path === postPath);
+		if (!p || (p.category ?? "") === target) return;
+		try {
+			const d = await postApi.detail(postPath);
+			const r = await postApi.save({ path: postPath, meta: { category: target }, body: d.body });
+			const idx = posts.value.findIndex((x) => x.path === postPath);
+			if (idx >= 0) posts.value[idx] = r.meta;
+			if (selected.value?.path === postPath) {
+				selected.value = r.meta;
+				// 就地编辑态不动 detail，避免覆盖编辑器中未保存的稿
+				if (mode.value !== "edit") detail.value = r;
+			}
+			ElMessage.success(target ? `已移入「${target}」` : "已移出分类");
+		} catch (e) {
+			ElMessage.error(`移入分类失败：${(e as Error).message}`);
+		}
 	}
 
 	/* ---------- 右侧预览 / 就地编辑 ---------- */
@@ -160,12 +200,13 @@
 	function mediaSanitize(html: string): string {
 		return localMediaSanitize(html);
 	}
-	/** 右栏模式：preview 渲染正文 / edit 原地切换编辑器（与完整编辑页共用 PostEditorPanel，无分栏预览） */
-	const mode = ref<"preview" | "edit">("preview");
+	/** 右栏模式：preview 渲染正文 / edit 原地切换编辑器 / site 嵌真站预览（点左侧任一文章退回 preview） */
+	const mode = ref<"preview" | "edit" | "site">("preview");
 	const inlineEditor = ref<InstanceType<typeof PostEditorPanel>>();
 
 	async function select(p: PostMeta): Promise<void> {
-		if (selected.value?.path === p.path) return;
+		// 站点预览态下点同一篇也放行，借此回到文章预览
+		if (selected.value?.path === p.path && mode.value !== "site") return;
 		// 就地编辑有改动时先静默自动保存（保存失败则留在当前文章，不丢稿）
 		if (mode.value === "edit" && inlineEditor.value) {
 			if (!(await inlineEditor.value.autoSaveIfDirty())) return;
@@ -187,6 +228,14 @@
 	/** 点击「编辑」：右栏原地切换为完整编辑器（右上角分栏图标可进入完整编辑页） */
 	function startInlineEdit(): void {
 		mode.value = "edit";
+	}
+
+	/** 点击「站点预览」：右栏整面切真站预览（未就绪时面板自动点火启动 dev server） */
+	async function openSitePreview(): Promise<void> {
+		if (mode.value === "edit" && inlineEditor.value) {
+			if (!(await inlineEditor.value.autoSaveIfDirty())) return;
+		}
+		mode.value = "site";
 	}
 
 	/** 就地保存成功：同步左列表与详情基线（编辑器留在编辑态，与完整编辑页一致） */
@@ -390,6 +439,8 @@
 							:active-urls="activeUrls"
 							@select-category="onNavCategory"
 							@node-click="onNavNodeClick"
+							@rename-category="onCatRename"
+							@assign-category="onCatAssign"
 						/>
 					</el-card>
 				</el-col>
@@ -404,6 +455,9 @@
 									<div class="grow"></div>
 									<el-button type="primary" @click="openCreate">
 										<el-icon><Plus /></el-icon>新建文章
+									</el-button>
+									<el-button plain @click="openSitePreview">
+										<el-icon><View /></el-icon>站点预览
 									</el-button>
 									<el-button plain title="刷新" @click="load">
 										<el-icon><Refresh /></el-icon>
@@ -490,11 +544,19 @@
 					</el-card>
 				</el-col>
 
-				<!-- 右：选中文章内容预览 / 原地编辑 -->
+				<!-- 右：选中文章内容预览 / 原地编辑 / 真站预览 -->
 				<el-col :span="13" class="preview-col">
-					<el-card shadow="never" class="preview-panel" v-loading="detailLoading">
+					<el-card
+						shadow="never"
+						class="preview-panel"
+						:class="{ 'is-site': mode === 'site' }"
+						v-loading="detailLoading"
+					>
+						<div v-if="mode === 'site'" class="site-preview">
+							<PreviewPanel autostart frame-height="100%" title="站点预览" />
+						</div>
 						<PostEditorPanel
-							v-if="selected && mode === 'edit'"
+							v-else-if="selected && mode === 'edit'"
 							ref="inlineEditor"
 							class="inline-editor"
 							:path="selected.path"
@@ -636,16 +698,16 @@
 		justify-content: center;
 		gap: 6px;
 		padding: 10px 4px;
-		border: 1px solid var(--el-border-color-lighter);
+		border: 1px solid var(--hairline);
 		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.5);
+		background: rgba(255, 255, 255, 0.55);
 		cursor: grab;
 		user-select: none;
 		text-align: center;
 	}
 	.preset-card:hover {
-		border-color: var(--el-color-warning);
-		background: rgba(230, 162, 60, 0.08);
+		border-color: rgba(230, 162, 60, 0.45);
+		background: rgba(255, 255, 255, 0.72);
 	}
 	.preset-card:active {
 		cursor: grabbing;
@@ -921,6 +983,28 @@
 	.inline-editor {
 		flex: 1;
 		min-height: 0;
+	}
+	/* 站点预览态：卡片体让位给整面真站 iframe（铺法同设置页） */
+	.site-preview {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.preview-panel.is-site :deep(.el-card__body) {
+		padding: 0;
+	}
+	.preview-panel.is-site :deep(.panel) {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.preview-panel.is-site :deep(.frame-wrap) {
+		flex: 1;
+		min-height: 0;
+		border: none;
+		border-radius: 0;
 	}
 	.preview-empty {
 		margin: auto;

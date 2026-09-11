@@ -16,6 +16,16 @@ addCollection(simpleIcons);
 /** 内置离线集合的 Iconify 前缀清单（提示文案用） */
 export const BUNDLED_ICON_PREFIXES = ["material-symbols", "fa6-brands", "simple-icons"];
 
+/** 内置集合的图标名清单（图标库选择器枚举用；与注册同源，不重复打包） */
+export const BUNDLED_COLLECTIONS: { prefix: string; names: string[] }[] = [
+	materialSymbols,
+	fa6Brands,
+	simpleIcons,
+].map((c) => ({
+	prefix: c.prefix,
+	names: [...Object.keys(c.icons), ...Object.keys(c.aliases ?? {})],
+}));
+
 /**
  * 图标名是否在内置离线集合中（同步判定，不触发网络请求）。
  * 名字格式非法（缺冒号前缀等）直接返回 false。
