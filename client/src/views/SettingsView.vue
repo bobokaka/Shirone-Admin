@@ -6,13 +6,12 @@
 	import * as prettier from "prettier/standalone";
 	import * as pluginHtml from "prettier/plugins/html";
 	import * as pluginPostcss from "prettier/plugins/postcss";
-	import type { FaviconItem, NavBarLink, ProfileLink, SiteMediaResult } from "@shirone-admin/shared";
+	import type { FaviconItem, ProfileLink, SiteMediaResult } from "@shirone-admin/shared";
 	import { aiApi, mediaApi, settingsApi } from "../api";
 	import { previewUrlOf } from "../utils/content-media";
 	import { TIMEZONE_OPTIONS } from "../utils/timezones";
 	import AiTextInput from "../components/AiTextInput.vue";
 	import HtmlCodeEditor from "../components/HtmlCodeEditor.vue";
-	import NavBarLinksEditor from "../components/NavBarLinksEditor.vue";
 	import PreviewPanel from "../components/PreviewPanel.vue";
 	import SiteImageUpload from "../components/SiteImageUpload.vue";
 	import WallpaperRecommendDialog from "../components/WallpaperRecommendDialog.vue";
@@ -31,15 +30,6 @@
 	/* ---------- 个人资料（profile.yaml）---------- */
 	const profileForm = ref({ avatar: "", name: "", bio: "" });
 	const profileLinks = ref<ProfileLink[]>([]);
-
-	/* ---------- 导航（nav-bar.yaml）---------- */
-	const navLinks = ref<NavBarLink[]>([]);
-
-	function addNav(kind: "preset" | "link" | "group"): void {
-		if (kind === "preset") navLinks.value.push({ preset: "" });
-		else if (kind === "group") navLinks.value.push({ name: "", icon: "", children: [] });
-		else navLinks.value.push({ name: "", icon: "", url: "", external: false });
-	}
 
 	/* ---------- 页脚（footer.yaml + footer.html）---------- */
 	const footerEnable = ref(false);
@@ -330,9 +320,6 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 			};
 			avatarDraft.value = profileForm.value.avatar;
 			profileLinks.value = (profile.links ?? []).map((l) => ({ name: l.name, icon: l.icon, url: l.url }));
-
-			const nav = await settingsApi.getNavbar();
-			navLinks.value = nav.links ?? [];
 
 			const footer = await settingsApi.getFooter();
 			footerEnable.value = Boolean(footer.enable);
@@ -861,32 +848,6 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 							title="语言切换只作用于界面文案，文章内容不随语言翻译"
 							class="i18n-tip"
 						/>
-					</section>
-				</el-tab-pane>
-
-				<el-tab-pane :label="`导航（${navLinks.length} 项）`" name="navbar">
-					<section class="sec">
-						<header class="sec-head">
-							<div>
-								<h3>导航菜单</h3>
-							</div>
-							<div class="head-actions">
-								<el-dropdown @command="(k: string | number | object) => addNav(k as 'preset' | 'link' | 'group')">
-									<el-button plain>
-										<el-icon><Plus /></el-icon>添加<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-									</el-button>
-									<template #dropdown>
-										<el-dropdown-menu>
-											<el-dropdown-item command="preset">内置页面</el-dropdown-item>
-											<el-dropdown-item command="link">自定义链接</el-dropdown-item>
-											<el-dropdown-item command="group">下拉分组</el-dropdown-item>
-										</el-dropdown-menu>
-									</template>
-								</el-dropdown>
-								<el-button type="primary" :loading="saving" @click="save(() => settingsApi.saveNavbar({ links: navLinks }))">保存</el-button>
-							</div>
-						</header>
-						<NavBarLinksEditor :links="navLinks" />
 					</section>
 				</el-tab-pane>
 

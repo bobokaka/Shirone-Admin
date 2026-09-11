@@ -1,25 +1,60 @@
+<script lang="ts">
+	import type { NavBarLink } from "@shirone-admin/shared";
+
+	/** 全树共享：当前编辑中的导航项与草稿（递归实例共用；单页面仅一棵树） */
+	const editingItem = ref<NavBarLink | null>(null);
+	/** 新增未落定的条目（弹窗取消时回滚移除，避免空名残留触发保存校验失败） */
+	let pendingNew: { list: NavBarLink[]; item: NavBarLink } | null = null;
+	/** 预设项行内改名草稿（与 editingItem 配套） */
+	const inlineName = ref("");
+	/** 行内改名必填校验未通过标记 */
+	const inlineError = ref(false);
+
+	interface EditDraft {
+		kind: "preset" | "group" | "link";
+		name?: string;
+		icon?: string;
+		url?: string;
+		external?: boolean;
+	}
+	const editDraft = ref<EditDraft | null>(null);
+</script>
+
 <script setup lang="ts">
 	/**
-	 * 导航菜单编辑器：列表只显示图标与中文名（分组收起时露出只读子树），
-	 * 点击行二次进入编辑；拖行头排序（可拖入其他分组），分组递归本组件。
+	 * 导航菜单编辑器（简单目录树）：行悬停浮出「编辑 / 删除」；预设页面名称行内编辑，
+	 * 分组 / 自定义链接走弹窗；分组常驻缩进子列表（递归本组件）。
+	 * 拖放两套机制解耦：树内移动走 vue-draggable-plus（SortableJS）；
+	 * 外部拖入（文章条目 / 预设卡片，见 PostListView）走原生 HTML5 + 自定义 MIME。
 	 */
-	import { ref } from "vue";
-	import type { NavBarLink } from "@shirone-admin/shared";
+	import { computed, nextTick, ref, type Directive, type Ref } from "vue";
+	import { ElMessage, ElMessageBox } from "element-plus";
+	import { useDraggable } from "vue-draggable-plus";
 	import DataIcon from "./DataIcon.vue";
 	import IconInput from "./IconInput.vue";
-	import { NAV_PRESETS, navPresetOf } from "../utils/navPresets";
+	import { NAV_DROP_MIME, navPresetOf, navPresetShort } from "../utils/navPresets";
 
-	const props = withDefaults(defineProps<{ links: NavBarLink[]; allowGroup?: boolean }>(), {
-		allowGroup: true,
-	});
+	const props = withDefaults(
+		defineProps<{
+			links: NavBarLink[];
+			allowGroup?: boolean;
+			depth?: number;
+			/** Categories 预设节点下动态挂载的虚拟分类节点（仅展示与点击，不写入 yaml） */
+			categories?: { value: string; label: string; count: number }[];
+			/** 当前过滤中的分类值（虚拟节点高亮） */
+			activeCategory?: string;
+			/** 选中文章的候选 url（命中的导航行高亮） */
+			activeUrls?: string[];
+		}>(),
+		{ allowGroup: true, depth: 0 },
+	);
+
+	const emit = defineEmits<{
+		selectCategory: [value: string];
+		nodeClick: [item: NavBarLink];
+	}>();
 
 	type NavKind = "preset" | "group" | "link";
-
-	const KIND_META: Record<NavKind, { label: string; tag: "info" | "warning" | "success" }> = {
-		preset: { label: "内置页面", tag: "info" },
-		group: { label: "分组", tag: "warning" },
-		link: { label: "自定义链接", tag: "success" },
-	};
 
 	function kindOf(item: NavBarLink): NavKind {
 		if (item.children) return "group";
@@ -28,241 +63,374 @@
 	}
 
 	function iconOf(item: NavBarLink): string {
-		if (kindOf(item) === "preset") return navPresetOf(item.preset)?.icon ?? "";
-		return item.icon ?? "";
+		if (item.preset !== undefined) return navPresetOf(item.preset)?.icon ?? item.icon ?? "";
+		return item.icon || "material-symbols:link";
 	}
 
 	function titleOf(item: NavBarLink): string {
-		if (kindOf(item) === "preset") {
+		if (item.preset !== undefined || kindOf(item) === "preset") {
+			if (item.name) return item.name;
 			const meta = navPresetOf(item.preset);
-			return meta ? meta.label : item.preset || "未选择预设";
+			return meta ? navPresetShort(meta.label) : item.preset || "未选择预设";
 		}
 		return item.name || "未命名";
 	}
 
-	/** 当前编辑行序号：-1 全收起，点击行切换 */
-	const editing = ref(-1);
-
-	function toggle(i: number): void {
-		editing.value = editing.value === i ? -1 : i;
+	/** Categories 预设节点：其下挂虚拟分类子节点 */
+	function isCategoriesNode(item: NavBarLink): boolean {
+		return kindOf(item) === "preset" && item.preset === "Categories";
 	}
 
-	function removeItem(i: number): void {
+	/** 行点击（行内改名态除外）：交给父级按 url / preset 决定联动 */
+	function onRowClick(item: NavBarLink): void {
+		if (!isInlineEditing(item)) emit("nodeClick", item);
+	}
+
+	/* ---------- 编辑：预设行内改名 / 分组与链接弹窗（全树共享一份状态） ---------- */
+
+	/** 行内输入自动聚焦（el-input 根是 wrapper，聚焦内部 input） */
+	const vFocus: Directive<HTMLElement> = {
+		mounted: (el) => (el.querySelector("input") ?? el).focus(),
+	};
+
+	const editKind = computed<NavKind | null>(() => (editingItem.value ? kindOf(editingItem.value) : null));
+	const editTitle = computed(() => (editKind.value === "group" ? "编辑分组" : "编辑链接"));
+	const dialogVisible = computed(() => editingItem.value !== null && editKind.value !== "preset");
+	/** 按类型取非空草稿，模板分支判空交给 computed */
+	const groupDraft = computed(() => (editDraft.value?.kind === "group" ? editDraft.value : null));
+	const linkDraft = computed(() => (editDraft.value?.kind === "link" ? editDraft.value : null));
+	const canApplyEdit = computed(() => Boolean(editDraft.value?.name?.trim()));
+
+	/** 预设项：本行处于行内改名态 */
+	function isInlineEditing(item: NavBarLink): boolean {
+		return editingItem.value === item && kindOf(item) === "preset";
+	}
+
+	function openEdit(item: NavBarLink): void {
+		editingItem.value = item;
+		if (kindOf(item) === "preset") {
+			// 回显当前显示名（无覆盖时即主题默认名），在默认值上改而非从空值新建
+			inlineName.value = titleOf(item);
+			inlineError.value = false;
+			return;
+		}
+		editDraft.value =
+			kindOf(item) === "group"
+				? { kind: "group", name: item.name ?? "", icon: item.icon ?? "" }
+				: {
+						kind: "link",
+						name: item.name ?? "",
+						icon: item.icon ?? "",
+						url: item.url ?? "",
+						external: item.external ?? false,
+					};
+	}
+
+	/** 预设项的默认名（主题预设表中文短名；未知预设退回原始值） */
+	function presetDefaultOf(item: NavBarLink): string {
+		const meta = navPresetOf(item.preset);
+		return meta ? navPresetShort(meta.label) : item.preset || "";
+	}
+
+	/** 预设行内「默认」：输入框恢复为默认名（保存时与默认一致即不写覆盖） */
+	function fillDefaultName(item: NavBarLink): void {
+		inlineName.value = presetDefaultOf(item);
+		inlineError.value = false;
+	}
+
+	/** 预设行内「保存」：名称必填且不超过 10 字符；与默认名相同则不写覆盖，保持跟随主题默认 */
+	function commitInlineEdit(item: NavBarLink): void {
+		if (!isInlineEditing(item)) return;
+		const v = inlineName.value.trim();
+		if (!v) {
+			inlineError.value = true;
+			ElMessage.warning("名称不能为空");
+			return;
+		}
+		if (v.length > 10) {
+			inlineError.value = true;
+			ElMessage.warning("名称不能超过 10 个字符");
+			return;
+		}
+		item.name = v !== presetDefaultOf(item) ? v : undefined;
+		editingItem.value = null;
+	}
+
+	function applyEdit(): void {
+		const item = editingItem.value;
+		const d = editDraft.value;
+		if (!item || !d || !canApplyEdit.value) return;
+		if (d.name !== undefined) item.name = d.name.trim();
+		if (d.icon !== undefined) item.icon = d.icon;
+		if (d.url !== undefined) item.url = d.url.trim();
+		if (d.external !== undefined) item.external = d.external;
+		closeEdit();
+	}
+
+	/** 删除前二次确认；分组附带子项数提示 */
+	async function confirmRemove(label: string, childCount = 0): Promise<boolean> {
+		const extra = childCount > 0 ? `（含 ${childCount} 个子项）` : "";
+		try {
+			await ElMessageBox.confirm(`确定删除「${label}」${extra}？`, "删除导航项", {
+				type: "warning",
+				confirmButtonText: "删除",
+				cancelButtonText: "取消",
+			});
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	async function removeItem(i: number): Promise<void> {
+		const item = props.links[i];
+		if (!item) return;
+		if (!(await confirmRemove(titleOf(item), item.children?.length ?? 0))) return;
 		props.links.splice(i, 1);
-		if (editing.value === i) editing.value = -1;
 	}
 
-	function move(i: number, delta: number): void {
-		const j = i + delta;
-		if (j < 0 || j >= props.links.length) return;
-		[props.links[i], props.links[j]] = [props.links[j], props.links[i]];
+	/** 顶层新增空分组并直接打开编辑弹窗（列头「分组」按钮用） */
+	function addAndEditGroup(): void {
+		const group: NavBarLink = { name: "", icon: "", children: [] };
+		props.links.push(group);
+		pendingNew = { list: props.links, item: group };
+		openEdit(group);
 	}
 
-	/* ---------- 拖拽排序：模块级上下文，跨实例（跨分组）移动 ---------- */
-	interface NavDragCtx {
-		list: NavBarLink[];
-		index: number;
+	/** 顶层新增空自定义链接并直接打开编辑弹窗（列头「链接」按钮用） */
+	function addAndEditLink(): void {
+		const link: NavBarLink = { name: "", icon: "", url: "" };
+		props.links.push(link);
+		pendingNew = { list: props.links, item: link };
+		openEdit(link);
 	}
-	let dragCtx: NavDragCtx | null = null;
+
+	/** 关闭编辑弹窗：新增条目仍未命名则回滚移除（应用/取消/esc 同一出口） */
+	function closeEdit(): void {
+		const item = editingItem.value;
+		if (item && pendingNew?.item === item && !item.name?.trim()) {
+			const i = pendingNew.list.indexOf(item);
+			if (i >= 0) pendingNew.list.splice(i, 1);
+		}
+		pendingNew = null;
+		editingItem.value = null;
+	}
+
+	defineExpose({ addAndEditGroup, addAndEditLink });
+
+	/* ---------- 拖拽 ----------
+	 * 两套机制完全解耦：
+	 * 1) 树内移动：vue-draggable-plus（SortableJS），每层列表一个 Sortable，同 group 跨层自由移动；
+	 * 2) 外部拖入（文章条目 / 预设卡，见 PostListView）：原生 HTML5 拖放，dataTransfer 携带
+	 *    自定义 MIME 的 JSON，本组件各级列表自行监听 dragover/drop，按行中点插入本层。
+	 * 互不依赖：外部拖入不走 Sortable 的克隆/跨列机制。 */
 
 	const rootEl = ref<HTMLElement | null>(null);
-	const dragOver = ref(false);
 
-	function onDragStart(i: number, e: DragEvent): void {
-		dragCtx = { list: props.links, index: i };
-		if (e.dataTransfer) {
-			e.dataTransfer.effectAllowed = "move";
-			e.dataTransfer.setData("text/plain", String(i));
-		}
-	}
-
-	function resetDrag(): void {
-		dragCtx = null;
-		dragOver.value = false;
-	}
-
-	function onDragOver(e: DragEvent): void {
-		if (!dragCtx || !e.dataTransfer) return;
+	/** 外部原生拖入：允许放置（仅认自家 MIME；嵌套层各自处理，不重复响应） */
+	function onNavDragOver(e: DragEvent): void {
+		if (!e.dataTransfer?.types.includes(NAV_DROP_MIME)) return;
+		if ((e.target as Element | null)?.closest(".nav-list") !== rootEl.value) return;
 		e.preventDefault();
-		e.dataTransfer.dropEffect = "move";
-		dragOver.value = true;
+		e.dataTransfer.dropEffect = "copy";
 	}
 
-	function onDragLeave(e: DragEvent): void {
-		if (!rootEl.value?.contains(e.relatedTarget as Node | null)) dragOver.value = false;
-	}
-
-	/** 落点插入序号：首个中点在指针下方的直接子节点之前，否则追加末尾 */
-	function insertionIndex(e: DragEvent): number {
-		const items = rootEl.value?.querySelectorAll<HTMLElement>(":scope > .nav-node") ?? [];
-		for (let i = 0; i < items.length; i += 1) {
-			const r = items[i].getBoundingClientRect();
-			if (e.clientY < r.top + r.height / 2) return i;
-		}
-		return items.length;
-	}
-
-	function onDrop(e: DragEvent): void {
-		const ctx = dragCtx;
-		if (!ctx) return;
+	/** 外部原生拖入释放：解析 JSON，按指针相对各行中点的位置插入本层 */
+	function onNavDrop(e: DragEvent): void {
+		const raw = e.dataTransfer?.getData(NAV_DROP_MIME);
+		if (!raw) return;
+		if ((e.target as Element | null)?.closest(".nav-list") !== rootEl.value) return;
 		e.preventDefault();
-		const item = ctx.list[ctx.index];
-		const to = insertionIndex(e);
-		resetDrag();
-		editing.value = -1;
-		if (!item) return;
-		// 嵌套层拒收分组（分组不可再套分组）
-		if (ctx.list !== props.links) {
-			if (!props.allowGroup && kindOf(item) === "group") return;
-			ctx.list.splice(ctx.index, 1);
-			props.links.splice(to, 0, item);
-		} else {
-			const [moved] = props.links.splice(ctx.index, 1);
-			props.links.splice(ctx.index < to ? to - 1 : to, 0, moved);
+		let item: NavBarLink;
+		try {
+			item = JSON.parse(raw) as NavBarLink;
+		} catch {
+			return;
 		}
+		const root = rootEl.value;
+		if (!root) return;
+		const rows = [...root.querySelectorAll<HTMLElement>(":scope > .nav-node > .nav-row")];
+		let at = rows.length;
+		for (let i = 0; i < rows.length; i += 1) {
+			const r = rows[i].getBoundingClientRect();
+			if (e.clientY < r.top + r.height / 2) {
+				at = i;
+				break;
+			}
+		}
+		props.links.splice(at, 0, item);
 	}
+
+	/** 树内跨层移动的落库兜底：库的 add 数据同步不稳定（remove 生效、add 可能丢），
+	 *  nextTick 后核对 clonedData 缺失则按事件索引自行插入（已插入则去重跳过） */
+	function ensureMoved(evt: { clonedData?: unknown; newDraggableIndex?: number }): void {
+		const data = evt.clonedData as NavBarLink | undefined;
+		if (!data) return;
+		void nextTick(() => {
+			if (props.links.includes(data)) return;
+			const at = Math.max(
+				0,
+				Math.min(evt.newDraggableIndex ?? props.links.length, props.links.length),
+			);
+			props.links.splice(at, 0, data);
+		});
+	}
+
+	useDraggable<NavBarLink>(
+		rootEl,
+		// 传普通数组（非 Ref）：库对普通数组走原地 splice，直接作用于 props.links，与父级响应式同源。
+		// 注意保持原生 DnD 模式：forceFallback 下库的跨层数据同步会失效（remove 生效、add 丢失）
+		props.links as unknown as Ref<NavBarLink[]>,
+		{
+			group: { name: "shirone-nav", pull: true, put: true },
+			draggable: ".nav-node",
+			filter: ".nav-row__edit, .nav-sub--cats",
+			animation: 150,
+			emptyInsertThreshold: 12,
+			onAdd(evt) {
+				ensureMoved(evt);
+			},
+		},
+	);
 </script>
 
 <template>
-	<div
-		ref="rootEl"
-		class="nav-list"
-		:class="{ 'nav-list--over': dragOver }"
-		@dragover="onDragOver"
-		@dragleave="onDragLeave"
-		@drop="onDrop"
-	>
-		<div
-			v-for="(item, i) in links"
-			:key="i"
-			class="nav-node"
-			:class="{ 'nav-node--editing': editing === i }"
-		>
-			<div
-				class="nav-row"
-				draggable="true"
-				@dragstart="onDragStart(i, $event)"
-				@dragend="resetDrag"
-				@click="toggle(i)"
-			>
-				<el-icon class="nav-row__caret" :class="{ 'is-open': editing === i }"><CaretRight /></el-icon>
-				<el-icon class="nav-row__grip"><Rank /></el-icon>
-				<DataIcon :icon="iconOf(item)" :label="titleOf(item)" :size="24" class="nav-row__icon" />
-				<span
-					class="nav-row__name"
-					:class="{ 'is-unknown': kindOf(item) === 'preset' && !navPresetOf(item.preset) }"
-				>
-					{{ titleOf(item) }}
-				</span>
-				<span v-if="kindOf(item) === 'group'" class="nav-row__count muted">{{ item.children?.length ?? 0 }} 项</span>
-				<el-tag class="nav-row__kind" size="small" effect="plain" :type="KIND_META[kindOf(item)].tag">
-					{{ KIND_META[kindOf(item)].label }}
-				</el-tag>
-				<span class="nav-row__ops">
-					<el-button size="small" circle text :disabled="i === 0" @click.stop="move(i, -1)">
-						<el-icon><ArrowUp /></el-icon>
-					</el-button>
-					<el-button size="small" circle text :disabled="i === links.length - 1" @click.stop="move(i, 1)">
-						<el-icon><ArrowDown /></el-icon>
-					</el-button>
-					<el-button size="small" circle text type="danger" @click.stop="removeItem(i)">
-						<el-icon><Close /></el-icon>
-					</el-button>
-				</span>
-			</div>
-
-			<!-- 分组收起时：只读子树 -->
-			<div v-if="kindOf(item) === 'group' && editing !== i" class="nav-subtree">
+	<div ref="rootEl" class="nav-list" @dragover="onNavDragOver" @drop="onNavDrop">
+		<!-- 稳定 key：节点元素与数据条目跨重渲染保持绑定 -->
+		<template v-for="(item, i) in links" :key="item.name ?? item.preset ?? item.url ?? i">
+			<div class="nav-node">
 				<div
-					v-for="(child, j) in item.children"
-					:key="j"
-					class="nav-row nav-row--child"
-					@click="toggle(i)"
+					class="nav-row"
+					:class="{ 'nav-row--active': Boolean(item.url) && (activeUrls ?? []).includes(item.url!) }"
+					@click="onRowClick(item)"
 				>
-					<DataIcon :icon="iconOf(child)" :label="titleOf(child)" :size="20" class="nav-row__icon" />
-					<span class="nav-row__name">{{ titleOf(child) }}</span>
+					<DataIcon :icon="iconOf(item)" :label="titleOf(item)" :size="20" class="nav-row__icon" />
+					<el-input
+						v-if="isInlineEditing(item)"
+						v-model="inlineName"
+						v-focus
+						class="nav-row__edit"
+						:class="{ 'is-error': inlineError }"
+						@input="inlineError = false"
+						@keydown.enter.prevent="commitInlineEdit(item)"
+						@keydown.esc.prevent="editingItem = null"
+					/>
+					<span v-else class="nav-row__name" :title="titleOf(item)">
+						{{ titleOf(item) }}
+					</span>
+					<span v-if="isInlineEditing(item)" class="nav-row__edit-ops">
+						<el-button size="small" circle text @click.stop="fillDefaultName(item)">
+							<el-icon><ScaleToOriginal /></el-icon>
+						</el-button>
+						<el-button size="small" text type="danger" @click.stop="editingItem = null">取消</el-button>
+						<el-button size="small" text type="primary" @click.stop="commitInlineEdit(item)">保存</el-button>
+					</span>
+					<span v-else class="nav-row__ops">
+						<el-button size="small" circle text @click.stop="openEdit(item)">
+							<el-icon><Edit /></el-icon>
+						</el-button>
+						<el-button size="small" circle text type="danger" @click.stop="removeItem(i)">
+							<el-icon><Close /></el-icon>
+						</el-button>
+					</span>
+				</div>
+
+				<!-- 分组：缩进子列表（递归本组件） -->
+				<div v-if="kindOf(item) === 'group' && item.children" class="nav-sub">
+					<NavBarLinksEditor
+						:links="item.children"
+						:allow-group="false"
+						:depth="depth + 1"
+						:categories="categories"
+						:active-category="activeCategory"
+						:active-urls="activeUrls"
+						@select-category="(v) => emit('selectCategory', v)"
+						@node-click="(it) => emit('nodeClick', it)"
+					/>
+				</div>
+
+				<!-- Categories 预设：动态虚拟分类子节点（不入 yaml；拖拽死区） -->
+				<div
+					v-if="isCategoriesNode(item) && categories && categories.length"
+					class="nav-sub nav-sub--cats"
+					@dragover.stop.prevent
+					@drop.stop.prevent
+				>
+					<div
+						v-for="c in categories"
+						:key="c.value"
+						class="cat-row"
+						:class="{ 'cat-row--active': c.value === activeCategory }"
+						@click="emit('selectCategory', c.value)"
+					>
+						<span class="cat-row__name">{{ c.label }}</span>
+						<span class="cat-row__count muted">{{ c.count }}</span>
+					</div>
 				</div>
 			</div>
-
-			<!-- 编辑区：点击行展开 -->
-			<div v-if="editing === i" class="nav-edit">
-				<template v-if="kindOf(item) === 'preset'">
-					<label class="nav-field">
-						<span class="nav-field__label">页面预设</span>
-						<el-select v-model="item.preset" filterable allow-create default-first-option placeholder="选择内置页面">
-							<el-option v-for="p in NAV_PRESETS" :key="p.value" :value="p.value" :label="p.label">
-								<div class="nav-preset-opt">
-									<DataIcon :icon="p.icon" :size="22" />
-									<span class="nav-preset-opt__label">{{ p.label }}</span>
-									<span class="nav-preset-opt__desc">{{ p.desc }}</span>
-								</div>
-							</el-option>
-						</el-select>
-					</label>
-					<p v-if="item.preset && !navPresetOf(item.preset)" class="nav-field__warn">未知预设，保存后构建会失败</p>
-				</template>
-
-				<template v-else-if="kindOf(item) === 'link'">
-					<div class="nav-edit__grid">
-						<label class="nav-field">
-							<span class="nav-field__label">名称</span>
-							<el-input v-model="item.name" placeholder="导航栏显示的文字" />
-						</label>
-						<label class="nav-field">
-							<span class="nav-field__label">图标</span>
-							<IconInput
-								:model-value="item.icon ?? ''"
-								:label="item.name ?? ''"
-								@update:model-value="(v: string) => (item.icon = v)"
-							/>
-						</label>
-						<label class="nav-field nav-field--full">
-							<span class="nav-field__label">链接地址</span>
-							<el-input v-model="item.url" placeholder="https://… 或 /path/" />
-						</label>
-					</div>
-					<el-checkbox v-model="item.external" class="nav-field__check">外部链接（新标签页打开）</el-checkbox>
-				</template>
-
-				<template v-else>
-					<div class="nav-edit__grid">
-						<label class="nav-field">
-							<span class="nav-field__label">分组名称</span>
-							<el-input v-model="item.name" placeholder="如：更多" />
-						</label>
-						<label class="nav-field">
-							<span class="nav-field__label">图标</span>
-							<IconInput
-								:model-value="item.icon ?? ''"
-								:label="item.name ?? ''"
-								@update:model-value="(v: string) => (item.icon = v)"
-							/>
-						</label>
-					</div>
-					<div class="nav-sub">
-						<NavBarLinksEditor v-if="item.children" :links="item.children" :allow-group="false" />
-						<div class="nav-sub__ops">
-							<el-button size="small" plain @click="item.children?.push({ preset: '' })">
-								<el-icon><Plus /></el-icon>内置页面
-							</el-button>
-							<el-button
-								size="small"
-								plain
-								@click="item.children?.push({ name: '', icon: '', url: '', external: false })"
-							>
-								<el-icon><Plus /></el-icon>自定义链接
-							</el-button>
-						</div>
-					</div>
-				</template>
-
-				<div class="nav-edit__done">
-					<el-button size="small" @click="editing = -1">收起</el-button>
-				</div>
-			</div>
-		</div>
+		</template>
 
 		<div v-if="!links.length" class="nav-list__empty muted">暂无菜单项</div>
+
+		<!-- 编辑弹窗（分组/链接）：仅根实例渲染一份；预设页面走行内改名 -->
+		<el-dialog
+			v-if="depth === 0"
+			:model-value="dialogVisible"
+			:title="editTitle"
+			width="500px"
+			append-to-body
+			@update:model-value="closeEdit"
+		>
+			<div v-if="groupDraft" class="nav-dialog-body">
+				<div class="nav-edit__grid">
+					<label class="nav-field">
+						<span class="nav-field__label">分组名称</span>
+						<el-input v-model="groupDraft.name" placeholder="如：更多" />
+					</label>
+					<label class="nav-field">
+						<span class="nav-field__label">图标</span>
+						<IconInput
+							:model-value="groupDraft.icon ?? ''"
+							:label="groupDraft.name ?? ''"
+							@update:model-value="(v: string) => (groupDraft!.icon = v)"
+						/>
+					</label>
+				</div>
+				<p v-if="!groupDraft.name?.trim()" class="nav-field__warn">分组名称不能为空</p>
+			</div>
+
+			<div v-else-if="linkDraft" class="nav-dialog-body">
+				<div class="nav-edit__grid">
+					<label class="nav-field">
+						<span class="nav-field__label">名称</span>
+						<el-input v-model="linkDraft.name" placeholder="导航栏显示的文字" />
+					</label>
+					<label class="nav-field">
+						<span class="nav-field__label">图标</span>
+						<IconInput
+							:model-value="linkDraft.icon ?? ''"
+							:label="linkDraft.name ?? ''"
+							@update:model-value="(v: string) => (linkDraft!.icon = v)"
+						/>
+					</label>
+				</div>
+				<label class="nav-field">
+					<span class="nav-field__label">链接地址</span>
+					<el-input v-model="linkDraft.url" placeholder="https://… 或 /path/" />
+				</label>
+				<el-checkbox
+					:model-value="linkDraft.external ?? false"
+					@update:model-value="(v: string | number | boolean) => (linkDraft!.external = Boolean(v))"
+				>
+					外部链接（新标签页打开）
+				</el-checkbox>
+				<p v-if="!linkDraft.name?.trim()" class="nav-field__warn">名称不能为空</p>
+			</div>
+			<template #footer>
+				<el-button @click="closeEdit">取消</el-button>
+				<el-button type="primary" :disabled="!canApplyEdit" @click="applyEdit">确定</el-button>
+			</template>
+		</el-dialog>
 	</div>
 </template>
 
@@ -270,75 +438,63 @@
 	.nav-list {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
-		border-radius: 12px;
-		transition: background 0.15s;
-	}
-	.nav-list--over {
-		background: rgba(103, 80, 164, 0.06);
 	}
 	.nav-list__empty {
-		padding: 18px 0;
+		padding: 12px 0;
 		text-align: center;
-		font-size: 20px;
-		border: 1px dashed var(--el-border-color);
-		border-radius: 10px;
+		font-size: calc(20px + var(--font-shift, 0px));
+		color: var(--el-text-color-secondary);
 	}
-	.nav-node {
-		border: 1px solid var(--el-border-color-lighter);
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.5);
-		overflow: hidden;
-	}
-	.nav-node--editing {
-		border-color: var(--el-color-primary);
-	}
+	/* 简单目录树：行 + 缩进引导线，无卡片描边 */
 	.nav-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		padding: 8px 12px;
-		cursor: pointer;
+		gap: 6px;
+		padding: 3px 6px;
+		border-radius: 6px;
+		cursor: grab;
 		user-select: none;
+		white-space: nowrap;
 	}
 	.nav-row:hover {
-		background: rgba(128, 128, 150, 0.07);
+		background: rgba(120, 120, 160, 0.09);
 	}
-	.nav-row__grip {
-		color: var(--el-text-color-secondary);
-		flex: none;
-		cursor: grab;
+	.nav-row:active {
+		cursor: grabbing;
+	}
+	.nav-row--active {
+		background: rgba(99, 102, 241, 0.1);
+		box-shadow: inset 2px 0 0 var(--el-color-primary);
 	}
 	.nav-row__icon {
 		flex: none;
+		color: var(--el-text-color-secondary);
 	}
 	.nav-row__name {
-		font-size: 20px;
-		font-weight: 600;
-		white-space: nowrap;
+		flex: 1;
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		font-size: calc(20px + var(--font-shift, 0px));
+		color: var(--el-text-color-primary);
 	}
-	.nav-row__name.is-unknown {
-		color: var(--el-color-danger);
-	}
-	.nav-row__count {
+	/* 行内改名输入框：定宽 */
+	.nav-row__edit {
 		flex: none;
-		font-size: 20px;
+		width: 140px;
 	}
-	.nav-row__kind {
+	.nav-row__edit.is-error :deep(.el-input__wrapper) {
+		box-shadow: 0 0 0 1.5px var(--el-color-danger) inset;
+	}
+	.nav-row__edit-ops {
+		display: inline-flex;
+		align-items: center;
 		flex: none;
 	}
-	.nav-row__caret {
-		flex: none;
-		color: var(--el-text-color-secondary);
-		transition: transform 0.2s;
-	}
-	.nav-row__caret.is-open {
-		transform: rotate(90deg);
+	.nav-row__edit-ops .el-button + .el-button {
+		margin-left: 2px;
 	}
 	.nav-row__ops {
-		margin-left: auto;
 		display: inline-flex;
 		align-items: center;
 		flex: none;
@@ -346,27 +502,56 @@
 		transition: opacity 0.15s;
 	}
 	.nav-row:hover .nav-row__ops,
-	.nav-node--editing .nav-row__ops {
+	.nav-row__ops:focus-within {
 		opacity: 1;
 	}
 	.nav-row__ops .el-button + .el-button {
 		margin-left: 2px;
 	}
-	.nav-subtree {
+	/* 子级：缩进 + 左侧引导线 */
+	.nav-sub {
+		margin-left: 14px;
+		padding-left: 10px;
+		border-left: 1px solid var(--el-border-color-lighter);
+	}
+	.nav-sub--cats {
 		display: flex;
 		flex-direction: column;
-		border-top: 1px dashed var(--el-border-color-lighter);
 	}
-	.nav-row--child {
-		padding: 5px 12px 5px 40px;
+	.cat-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 2px 6px;
+		border-radius: 6px;
+		cursor: pointer;
+		user-select: none;
 	}
-	.nav-row--child .nav-row__name {
-		font-weight: 400;
-		color: var(--el-text-color-regular);
+	.cat-row:hover {
+		background: rgba(120, 120, 160, 0.09);
 	}
-	.nav-edit {
-		border-top: 1px dashed var(--el-border-color-lighter);
-		padding: 12px;
+	.cat-row--active {
+		background: rgba(99, 102, 241, 0.12);
+	}
+	.cat-row__name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: calc(20px + var(--font-shift, 0px));
+	}
+	.cat-row__count {
+		flex: none;
+		font-size: calc(20px + var(--font-shift, 0px));
+	}
+	/* SortableJS：占位虚化指示 */
+	.nav-node.sortable-ghost {
+		opacity: 0.4;
+		outline: 1px dashed var(--el-color-primary);
+		border-radius: 6px;
+	}
+	/* 编辑弹窗表单 */
+	.nav-dialog-body {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
@@ -382,53 +567,14 @@
 		gap: 4px;
 		min-width: 0;
 	}
-	.nav-field--full {
-		grid-column: 1 / -1;
-	}
 	.nav-field__label {
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		color: var(--el-text-color-secondary);
 		line-height: 1;
 	}
-	.nav-field__check {
-		font-size: 20px;
-	}
 	.nav-field__warn {
 		margin: 0;
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		color: var(--el-color-danger);
-	}
-	.nav-edit__done {
-		display: flex;
-		justify-content: flex-end;
-	}
-	.nav-sub {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		padding: 10px;
-		border: 1px dashed var(--el-border-color);
-		border-radius: 10px;
-	}
-	.nav-sub__ops {
-		display: flex;
-		gap: 8px;
-	}
-	/* 预设富选项：下拉虽 teleport 到 body，插槽节点仍带 scope 属性，scoped 样式可生效 */
-	.nav-preset-opt {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		min-width: 0;
-	}
-	.nav-preset-opt__label {
-		flex: none;
-	}
-	.nav-preset-opt__desc {
-		margin-left: auto;
-		color: var(--el-text-color-secondary);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
 	}
 </style>

@@ -36,3 +36,11 @@ export function navPresetOf(value: string | undefined): NavPresetMeta | null {
 	if (!value) return null;
 	return NAV_PRESETS.find((p) => p.value === value) ?? null;
 }
+
+/** 纯中文名（去掉「（English）」后缀），来源列表等紧凑展示用 */
+export function navPresetShort(label: string): string {
+	return label.replace(/（[^）]*）\s*$/, "");
+}
+
+/** 导航树外部拖入（文章条目 / 预设卡 → 导航菜单）的自定义 dataTransfer MIME 类型 */
+export const NAV_DROP_MIME = "application/x-shirone-nav";

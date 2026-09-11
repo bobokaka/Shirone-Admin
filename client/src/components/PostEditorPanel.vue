@@ -521,11 +521,16 @@
 		}
 	}
 
-	async function saveThenPublish(): Promise<void> {
-		if (await save(true)) {
-			ElMessage.success("已保存，可去发布页提交");
-			router.push("/publish");
+	/** 发布＝保存并落盘 draft=false 后返回列表：仅维护本地状态，站点上线发生在代码推送之后 */
+	async function saveAndPublish(): Promise<void> {
+		const wasDraft = draft.value;
+		draft.value = false;
+		if (!(await save(true))) {
+			draft.value = wasDraft;
+			return;
 		}
+		ElMessage.success("已标记发布，推送代码后上线");
+		emit("back");
 	}
 
 	async function remove(): Promise<void> {
@@ -559,7 +564,7 @@
 	): Promise<void> {
 		try {
 			const results = await Promise.all(files.map((f) => mediaApi.postImage(slug.value, f)));
-			callback(results.map((r) => ({ url: r.src, alt: "", title: "" })));
+			callback(results.map((r) => ({ url: r.src, alt: r.alt ?? "", title: "" })));
 		} catch (e) {
 			callback((e as Error).message);
 		}
@@ -637,7 +642,7 @@
 			</el-button>
 			<el-button type="danger" plain @click="remove">删除</el-button>
 			<el-button type="primary" :loading="saving" @click="save()">保存</el-button>
-			<el-button type="success" :loading="saving" @click="saveThenPublish">保存并去发布</el-button>
+			<el-button type="success" :loading="saving" @click="saveAndPublish">发布</el-button>
 			<span v-if="lastAutoSavedAt" class="auto-save-hint">已自动保存 {{ lastAutoSavedAt }}</span>
 			<!-- 分栏编辑图标：竖向分隔 + 左右两栏（本地 material-symbols 集合，无网络请求） -->
 			<el-tooltip v-if="expandable" content="分栏编辑（左右分栏预览）" placement="bottom">
@@ -730,22 +735,6 @@
 						clearable
 					/>
 				</el-form-item>
-				<el-form-item label="分类">
-					<el-select
-						v-model="category"
-						filterable
-						allow-create
-						default-first-option
-						clearable
-						placeholder="选择已有，或输入新建"
-						style="width: 100%"
-					>
-						<el-option v-for="c in categoryOptions" :key="c.name" :value="c.name" :label="c.name">
-							<span>{{ c.name }}</span>
-							<span class="opt-count">{{ c.n }} 篇</span>
-						</el-option>
-					</el-select>
-				</el-form-item>
 				<el-form-item label="标签">
 					<el-select
 						v-model="tags"
@@ -783,6 +772,20 @@
 				</el-form-item>
 				<el-form-item label="开关">
 					<el-checkbox v-model="draft">草稿</el-checkbox>
+					<el-select
+						v-model="category"
+						filterable
+						allow-create
+						default-first-option
+						clearable
+						placeholder="分类"
+						class="switch-category"
+					>
+						<el-option v-for="c in categoryOptions" :key="c.name" :value="c.name" :label="c.name">
+							<span>{{ c.name }}</span>
+							<span class="opt-count">{{ c.n }} 篇</span>
+						</el-option>
+					</el-select>
 					<el-checkbox v-model="pinned">置顶</el-checkbox>
 					<el-checkbox v-model="comment">评论</el-checkbox>
 					<el-checkbox v-model="encrypted">加密</el-checkbox>
@@ -967,7 +970,7 @@
 		min-width: 0;
 	}
 	.title-input :deep(.el-input__wrapper) {
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		font-weight: 600;
 		padding: 4px 14px;
 	}
@@ -976,7 +979,7 @@
 		min-height: 0;
 	}
 	.editor-wrap :deep(.md-editor) {
-		--md-bk-color: rgba(255, 255, 255, 0.55);
+		--md-bk-color: #fff;
 		height: 100%;
 		border-radius: 14px;
 		border: 1px solid var(--glass-border-soft);
@@ -985,10 +988,10 @@
 	/* 正文 ≥ 20px：编辑器源码区（CodeMirror 正文）与预览区文字同步抬高 */
 	.editor-wrap :deep(.cm-content),
 	.editor-wrap :deep(.md-editor-preview) {
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 	}
 	.drawer-meta {
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		margin-bottom: 12px;
 		word-break: break-all;
 	}
@@ -997,6 +1000,11 @@
 	}
 	.drawer-form :deep(.el-collapse) {
 		border: none;
+	}
+	/* 开关行内嵌分类选择（草稿右侧）：定宽 + 间距，窄抽屉自动换行 */
+	.switch-category {
+		width: 220px;
+		margin: 0 12px;
 	}
 	.cover-upload {
 		cursor: pointer;
@@ -1019,13 +1027,13 @@
 		width: 100%;
 	}
 	.link-preview {
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 	}
 	/* 下拉候选项右侧的使用次数 */
 	.opt-count {
 		float: right;
 		color: var(--el-text-color-secondary);
-		font-size: 16px;
+		font-size: calc(16px + var(--font-shift, 0px));
 	}
 	/* AI 工具栏触发器：图标 + 「AI」文字（区别于纯图标工具，一眼可辨） */
 	.ai-toolbar-trigger {
@@ -1035,12 +1043,12 @@
 		gap: 3px;
 		height: 24px;
 		padding: 0 5px;
-		font-size: 18px;
+		font-size: calc(18px + var(--font-shift, 0px));
 		color: inherit;
 	}
 	.ai-toolbar-text {
 		font-style: normal;
-		font-size: 12px;
+		font-size: calc(12px + var(--font-shift, 0px));
 		font-weight: 600;
 		line-height: 1;
 	}
@@ -1060,13 +1068,13 @@
 		align-items: center;
 		gap: 8px;
 		padding: 7px 10px;
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		border-radius: 6px;
 		cursor: pointer;
 		color: inherit;
 	}
 	.ai-toolbar-menu button .el-icon {
-		font-size: 16px;
+		font-size: calc(16px + var(--font-shift, 0px));
 		opacity: 0.75;
 	}
 	.ai-toolbar-menu button:hover:not(:disabled) {
@@ -1091,7 +1099,7 @@
 		flex-shrink: 0;
 	}
 	.ai-toolbar-custom button .el-icon {
-		font-size: 14px;
+		font-size: calc(14px + var(--font-shift, 0px));
 	}
 	.ai-toolbar-custom input {
 		flex: 1;
@@ -1099,19 +1107,19 @@
 		border: 1px solid rgba(128, 128, 128, 0.35);
 		border-radius: 6px;
 		padding: 5px 8px;
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		background: transparent;
 		color: inherit;
 		outline: none;
 	}
 	.ai-length-warn {
 		color: var(--el-color-danger);
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		margin-bottom: 8px;
 	}
 	/* 顶栏自动保存时间提示 */
 	.auto-save-hint {
-		font-size: 16px;
+		font-size: calc(16px + var(--font-shift, 0px));
 		color: var(--el-text-color-placeholder);
 		white-space: nowrap;
 	}
@@ -1123,7 +1131,7 @@
 		margin-bottom: 8px;
 	}
 	.diff-count {
-		font-size: 16px;
+		font-size: calc(16px + var(--font-shift, 0px));
 		color: var(--el-text-color-secondary);
 	}
 	.diff-nav-spacer {
@@ -1145,7 +1153,7 @@
 		grid-template-columns: 46px 1fr 46px 1fr;
 		background: var(--el-fill-color-light);
 		border-bottom: 1px solid var(--el-border-color-lighter);
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		font-weight: 600;
 		color: var(--el-text-color-secondary);
 	}
@@ -1160,7 +1168,7 @@
 		max-height: 62vh;
 		overflow: auto;
 		font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		line-height: 1.7;
 	}
 	.diff-row {
@@ -1185,7 +1193,7 @@
 		padding: 0 6px 0 4px;
 		text-align: right;
 		color: var(--el-text-color-placeholder);
-		font-size: 11px;
+		font-size: calc(11px + var(--font-shift, 0px));
 		background: var(--el-fill-color-lighter);
 		user-select: none;
 		min-height: 1.7em;
@@ -1248,7 +1256,7 @@
 		border-bottom: 1px dashed var(--el-border-color-lighter);
 		background: var(--el-fill-color-light);
 		padding: 4px 12px;
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 		font-family: inherit;
 		color: var(--el-text-color-secondary);
 		cursor: pointer;
@@ -1276,7 +1284,7 @@
 		padding: 6px 12px;
 		border-top: 1px solid var(--el-border-color-lighter);
 		background: var(--el-fill-color-light);
-		font-size: 20px;
+		font-size: calc(20px + var(--font-shift, 0px));
 	}
 	.legend-item {
 		display: inline-flex;
