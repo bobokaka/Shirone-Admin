@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
+	BatchPostAction,
+	BatchPostResult,
 	CreatePostInput,
 	MediaUploadResult,
 	MomentFile,
@@ -317,6 +319,35 @@ export async function deletePost(rel: string): Promise<void> {
 		recursive: true,
 		force: true,
 	}).catch(() => {});
+}
+
+/** 批量动作 → 目标 frontmatter 补丁（一律改成目标状态，不关心原状态） */
+const BATCH_META_PATCH: Record<Exclude<BatchPostAction, "delete">, Record<string, unknown>> = {
+	publish: { draft: false },
+	unpublish: { draft: true },
+	pin: { pinned: true },
+	unpin: { pinned: false },
+};
+
+/** 批量操作：逐篇隔离执行，单篇失败不阻断其余 */
+export async function batchPosts(action: BatchPostAction, paths: string[]): Promise<BatchPostResult> {
+	const succeeded: string[] = [];
+	const failed: BatchPostResult["failed"] = [];
+	for (const p of paths) {
+		try {
+			if (action === "delete") {
+				await deletePost(p);
+			} else {
+				// 与单篇切换同语义：先取原文再原样回写，只改目标字段（正文、published 格式原样保留）
+				const file = await readPost(p);
+				await savePost({ path: p, meta: BATCH_META_PATCH[action], body: file.body });
+			}
+			succeeded.push(p);
+		} catch (e) {
+			failed.push({ path: p, error: (e as Error).message });
+		}
+	}
+	return { succeeded, failed };
 }
 
 /* ---------- 说说 ---------- */

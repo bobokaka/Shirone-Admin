@@ -4,6 +4,8 @@ import type {
 	AiTestResult,
 	BangumiCandidate,
 	BangumiDetail,
+	BatchPostAction,
+	BatchPostResult,
 	CreatePostInput,
 	DataItem,
 	DataKind,
@@ -79,6 +81,9 @@ export const postApi = {
 		clearPassword?: boolean;
 	}) => api.put<PostFile>("/api/posts", input),
 	remove: (path: string) => api.del<{ ok: boolean }>(`/api/posts?path=${encodeURIComponent(path)}`),
+	/** 批量操作：一律改为目标状态（发布/取消发布/置顶/取消置顶/删除） */
+	batch: (action: BatchPostAction, paths: string[]) =>
+		api.post<BatchPostResult>("/api/posts/batch", { action, paths }),
 	slug: (title: string, slug?: string) =>
 		api.post<SlugSuggestion>("/api/slug", { title, slug }),
 };

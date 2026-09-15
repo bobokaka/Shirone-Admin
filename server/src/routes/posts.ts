@@ -19,6 +19,11 @@ const saveSchema = z.object({
 
 const pathQuery = z.object({ path: z.string().min(1) });
 
+const batchSchema = z.object({
+	action: z.enum(["delete", "publish", "unpublish", "pin", "unpin"]),
+	paths: z.array(z.string().min(1)).min(1, "未选择文章"),
+});
+
 export async function postRoutes(app: FastifyInstance): Promise<void> {
 	app.get("/api/posts", async () => storage.listPosts());
 
@@ -37,6 +42,11 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
 	app.delete("/api/posts", async (req) => {
 		await storage.deletePost(pathQuery.parse(req.query).path);
 		return { ok: true };
+	});
+
+	app.post("/api/posts/batch", async (req) => {
+		const { action, paths } = batchSchema.parse(req.body);
+		return storage.batchPosts(action, paths);
 	});
 
 	app.post("/api/slug", async (req) => {

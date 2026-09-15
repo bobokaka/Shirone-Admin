@@ -590,6 +590,7 @@ body::after {
 .el-textarea__inner,
 .el-select__wrapper,
 .el-select-dropdown__item,
+.el-dropdown-menu__item,
 .el-dialog__body,
 .el-descriptions__body .el-descriptions__table .el-descriptions__cell,
 .el-collapse-item__header,
@@ -598,6 +599,15 @@ body::after {
 .el-message-box__title,
 .el-message-box__message {
 	font-size: 20px;
+}
+
+/* 下拉菜单危险项（批量删除等破坏性动作）：红色文字，悬停不褪色 */
+.el-dropdown-menu__item.is-danger {
+	color: var(--el-color-danger);
+}
+
+.el-dropdown-menu__item.is-danger:not(.is-disabled):hover {
+	color: var(--el-color-danger);
 }
 
 /* 统计数字（仪表盘） */

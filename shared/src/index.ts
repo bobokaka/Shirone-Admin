@@ -169,6 +169,18 @@ export interface SavePostInput {
 	clearPassword?: boolean;
 }
 
+/* ---------- 文章批量操作 ---------- */
+
+/** 批量动作：删除 / 发布 / 取消发布 / 置顶 / 取消置顶（一律改为目标状态，不关心原状态） */
+export type BatchPostAction = "delete" | "publish" | "unpublish" | "pin" | "unpin";
+
+export interface BatchPostResult {
+	/** 成功的文章路径 */
+	succeeded: string[];
+	/** 失败明细（逐篇隔离，单篇失败不阻断其余） */
+	failed: Array<{ path: string; error: string }>;
+}
+
 export interface MomentInput {
 	/** YYYY-MM-DD HH:mm:ss */
 	published: string;

@@ -3,7 +3,7 @@
 	import { useRoute, useRouter } from "vue-router";
 	import { ElMessage, ElMessageBox } from "element-plus";
 	import { MdPreview } from "md-editor-v3";
-	import type { NavBarLink, PostFile, PostMeta } from "@shirone-admin/shared";
+	import type { BatchPostAction, NavBarLink, PostFile, PostMeta } from "@shirone-admin/shared";
 	import { postApi, settingsApi, taxonomyApi } from "../api";
 	import { localMediaSanitize, postPreviewBody } from "../utils/content-media";
 	import {
@@ -348,6 +348,111 @@
 		void loadNav();
 	}
 
+	/* ---------- 批量操作（勾选 → 一律改为目标状态） ---------- */
+
+	const BATCH_ACTION_LABEL: Record<BatchPostAction, string> = {
+		delete: "批量删除",
+		publish: "批量发布",
+		unpublish: "批量取消发布",
+		pin: "批量置顶",
+		unpin: "批量取消置顶",
+	};
+
+	const checkedPaths = ref(new Set<string>());
+	const batchBusy = ref(false);
+
+	const allFilteredChecked = computed(
+		() => filtered.value.length > 0 && filtered.value.every((p) => checkedPaths.value.has(p.path)),
+	);
+
+	/** el-checkbox change 值为 boolean | string | number，按 === true 判定勾选 */
+	function toggleCheck(path: string, v: boolean | string | number): void {
+		if (v === true) checkedPaths.value.add(path);
+		else checkedPaths.value.delete(path);
+	}
+
+	/** 全选作用于当前筛选结果（不动其他筛选页勾选） */
+	function toggleCheckAll(v: boolean | string | number): void {
+		const on = v === true;
+		for (const p of filtered.value) {
+			if (on) checkedPaths.value.add(p.path);
+			else checkedPaths.value.delete(p.path);
+		}
+	}
+
+	/** 批量下拉分发：选择类命令就地处理，动作类走 runBatch */
+	function onBatchCommand(cmd: string): void {
+		if (cmd === "select-all") {
+			toggleCheckAll(!allFilteredChecked.value);
+			return;
+		}
+		if (cmd === "clear") {
+			checkedPaths.value.clear();
+			return;
+		}
+		void runBatch(cmd as BatchPostAction);
+	}
+
+	async function runBatch(action: BatchPostAction): Promise<void> {
+		const paths = [...checkedPaths.value];
+		if (batchBusy.value) return;
+		if (paths.length === 0) {
+			ElMessage.warning("未勾选任何文章");
+			return;
+		}
+		const label = BATCH_ACTION_LABEL[action];
+		try {
+			await ElMessageBox.confirm(
+				action === "delete"
+					? `将删除选中的 ${paths.length} 篇文章（目录形式含其全部配图）。已提交过 git 的内容可从历史恢复，确定删除？`
+					: `确定对选中的 ${paths.length} 篇文章执行「${label}」？`,
+				label,
+				{
+					...(action === "delete" ? { type: "warning" as const } : {}),
+					confirmButtonText: action === "delete" ? "删除" : "确定",
+					cancelButtonText: "取消",
+				},
+			);
+		} catch {
+			return; // 用户取消
+		}
+		// 正在就地编辑的文章也在删除范围：先退出编辑态，防 load() 重选时对已删稿触发自动保存
+		if (action === "delete" && selected.value && paths.includes(selected.value.path)) {
+			mode.value = "preview";
+		}
+		batchBusy.value = true;
+		try {
+			const r = await postApi.batch(action, paths);
+			if (r.failed.length === 0) {
+				ElMessage.success(`${BATCH_ACTION_LABEL[action]}完成：${r.succeeded.length} 篇`);
+			} else {
+				ElMessage.warning(
+					`${BATCH_ACTION_LABEL[action]}：成功 ${r.succeeded.length} 篇，失败 ${r.failed.length} 篇（${r.failed[0].path}：${r.failed[0].error}）`,
+				);
+			}
+			if (action === "delete") {
+				await load();
+				void loadNav();
+				return;
+			}
+			// 状态类操作：就地刷新列表元数据；当前预览篇在变更之列时同步右栏，编辑态基线不动
+			posts.value = await postApi.list();
+			const fresh = selected.value
+				? posts.value.find((p) => p.path === selected.value?.path)
+				: undefined;
+			if (fresh) {
+				selected.value = fresh;
+				if (mode.value !== "edit" && detail.value?.meta.path === fresh.path) {
+					detail.value = { ...detail.value, meta: fresh };
+				}
+			}
+		} catch (e) {
+			ElMessage.error(`批量操作失败：${(e as Error).message}`);
+		} finally {
+			batchBusy.value = false;
+		}
+	}
+
 	const tags = computed(() => {
 		const set = new Map<string, number>();
 		for (const p of posts.value) {
@@ -377,6 +482,11 @@
 		loading.value = true;
 		try {
 			posts.value = await postApi.list();
+			// 勾选集剔除已不存在的文章（删除/外部变更后失效路径）
+			const alive = new Set(posts.value.map((p) => p.path));
+			for (const cp of [...checkedPaths.value]) {
+				if (!alive.has(cp)) checkedPaths.value.delete(cp);
+			}
 			// 首次进入默认选中第一篇；选中项被删后回落到第一篇
 			if (!selected.value || !posts.value.some((p) => p.path === selected.value?.path)) {
 				if (posts.value.length > 0) await select(posts.value[0]);
@@ -508,6 +618,36 @@
 								<div class="list-head-row">
 									<span class="list-head-title">文章（{{ filtered.length }}/{{ posts.length }}）</span>
 									<div class="grow"></div>
+									<el-dropdown trigger="click" @command="onBatchCommand">
+										<el-button
+											plain
+											:type="checkedPaths.size > 0 ? 'primary' : undefined"
+											:title="
+												checkedPaths.size > 0
+													? `已选 ${checkedPaths.size} 篇，选择批量操作`
+													: '批量操作：先勾选列表卡片'
+											"
+										>
+											<el-icon><Files /></el-icon>
+											<span>批量{{ checkedPaths.size > 0 ? `(${checkedPaths.size})` : "" }}</span>
+											<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+										</el-button>
+										<template #dropdown>
+											<el-dropdown-menu>
+												<el-dropdown-item command="select-all">
+													{{ allFilteredChecked ? "取消全选" : "全选当前列表" }}
+												</el-dropdown-item>
+												<el-dropdown-item command="clear" divided>清除勾选</el-dropdown-item>
+												<el-dropdown-item command="publish" divided>批量发布</el-dropdown-item>
+												<el-dropdown-item command="unpublish">批量取消发布</el-dropdown-item>
+												<el-dropdown-item command="pin">批量置顶</el-dropdown-item>
+												<el-dropdown-item command="unpin">批量取消置顶</el-dropdown-item>
+												<el-dropdown-item command="delete" divided class="is-danger">
+													批量删除
+												</el-dropdown-item>
+											</el-dropdown-menu>
+										</template>
+									</el-dropdown>
 									<el-button type="primary" @click="openCreate">
 										<el-icon><Plus /></el-icon>新建文章
 									</el-button>
@@ -545,7 +685,7 @@
 								</el-select>
 							</div>
 						</template>
-						<div class="list-scroll">
+						<div class="list-scroll" :class="{ 'batch-active': checkedPaths.size > 0 }">
 							<div v-if="filtered.length === 0" class="list-empty">没有符合条件的文章</div>
 							<div
 								v-for="p in filtered"
@@ -556,48 +696,57 @@
 								@click="select(p)"
 								@dragstart="postDragStart(p, $event)"
 							>
-								<div class="post-item-title-row">
-									<div class="post-item-title">{{ p.title }}</div>
-									<div class="post-item-flags">
-										<el-tag v-if="p.draft" size="small" type="warning">草稿</el-tag>
-										<span
-											v-else
-											class="pin-toggle"
-											:class="{ 'is-pinned': p.pinned, busy: pinToggling === p.path }"
-											@click.stop="togglePin(p)"
-										>
-											<span class="pin-toggle__label pin-toggle__label--idle">
-												{{ p.pinned ? "置顶" : "已发布" }}
+								<el-checkbox
+									class="post-item-check"
+									:model-value="checkedPaths.has(p.path)"
+									:disabled="batchBusy"
+									@change="(v: boolean | string | number) => toggleCheck(p.path, v)"
+									@click.stop
+								/>
+									<div class="post-item-main">
+										<div class="post-item-title-row">
+											<div class="post-item-title">{{ p.title }}</div>
+											<div class="post-item-flags">
+												<el-tag v-if="p.draft" size="small" type="warning">草稿</el-tag>
+												<span
+													v-else
+													class="pin-toggle"
+													:class="{ 'is-pinned': p.pinned, busy: pinToggling === p.path }"
+													@click.stop="togglePin(p)"
+												>
+													<span class="pin-toggle__label pin-toggle__label--idle">
+														{{ p.pinned ? "置顶" : "已发布" }}
+													</span>
+													<span class="pin-toggle__label pin-toggle__label--hover">
+														{{ p.pinned ? "取消置顶" : "置顶" }}
+													</span>
+												</span>
+												<el-tag v-if="p.encrypted" size="small" type="danger">加密</el-tag>
+											</div>
+										</div>
+										<div class="post-item-meta">
+											<el-tag
+												v-if="p.category"
+												size="small"
+												class="post-item-category"
+												:style="categoryCardStyle(p.category)"
+											>
+												{{ p.category }}
+											</el-tag>
+											<span class="muted post-item-time">
+												{{ itemTime(p) }}
 											</span>
-											<span class="pin-toggle__label pin-toggle__label--hover">
-												{{ p.pinned ? "取消置顶" : "置顶" }}
-											</span>
-										</span>
-										<el-tag v-if="p.encrypted" size="small" type="danger">加密</el-tag>
+										</div>
+										<div v-if="p.tags.length" class="post-item-tags">
+											<el-tag v-for="t in p.tags" :key="t" size="small" :style="tagColorStyle(t)">
+												{{ t }}
+											</el-tag>
+										</div>
 									</div>
 								</div>
-								<div class="post-item-meta">
-									<el-tag
-										v-if="p.category"
-										size="small"
-										class="post-item-category"
-										:style="categoryCardStyle(p.category)"
-									>
-										{{ p.category }}
-									</el-tag>
-									<span class="muted post-item-time">
-										{{ itemTime(p) }}
-									</span>
-								</div>
-								<div v-if="p.tags.length" class="post-item-tags">
-									<el-tag v-for="t in p.tags" :key="t" size="small" :style="tagColorStyle(t)">
-										{{ t }}
-									</el-tag>
-								</div>
 							</div>
-						</div>
-					</el-card>
-				</el-col>
+						</el-card>
+					</el-col>
 
 				<!-- 右：选中文章内容预览 / 原地编辑 / 真站预览 -->
 				<el-col :span="13" class="preview-col">
@@ -819,6 +968,33 @@
 	.list-head-row .el-select {
 		min-width: 0;
 	}
+	/* 卡片勾选框：默认隐形但占位（悬停不跳动），悬停 / 已勾 / 批量态常显；
+	   放大到 20px 圆角描边并加重对勾，与 18px 字号的卡片标题对齐 */
+	.post-item-check {
+		--el-checkbox-input-width: 20px;
+		--el-checkbox-input-height: 20px;
+		--el-checkbox-border-radius: 6px;
+		flex: none;
+		margin-right: 0;
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.15s ease;
+	}
+	.post-item-check :deep(.el-checkbox__inner) {
+		border-width: 1.5px;
+		box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+	}
+	.post-item-check :deep(.el-checkbox__inner::after) {
+		width: 4px;
+		height: 10px;
+		border-width: 2px;
+	}
+	.post-item:hover .post-item-check,
+	.post-item-check.is-checked,
+	.list-scroll.batch-active .post-item-check {
+		opacity: 1;
+		pointer-events: auto;
+	}
 	.list-panel :deep(.el-card__body) {
 		flex: 1;
 		min-height: 0;
@@ -838,9 +1014,12 @@
 		font-size: 18px;
 		padding: 30px 0;
 	}
-	/* 卡片格子：描边圆角小卡，悬停浮起，选中主色描边 */
+	/* 卡片格子：描边圆角小卡，悬停浮起，选中主色描边；勾选框在整卡垂直居中 */
 	.post-item {
 		flex: none;
+		display: flex;
+		align-items: center;
+		gap: 8px;
 		padding: 10px 12px;
 		border: 1px solid var(--el-border-color-lighter);
 		border-radius: 10px;
@@ -851,6 +1030,10 @@
 			border-color 0.15s ease,
 			box-shadow 0.15s ease,
 			background-color 0.15s ease;
+	}
+	.post-item-main {
+		flex: 1;
+		min-width: 0;
 	}
 	.post-item:hover {
 		border-color: var(--el-border-color);
