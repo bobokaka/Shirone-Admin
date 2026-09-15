@@ -132,6 +132,28 @@ export interface FolderPickResult {
 	folder?: string;
 }
 
+/** 系统文件选择对话框（单选；用于本地导入选 md，服务端拿绝对路径直读其所在目录） */
+export interface FilePickResult {
+	canceled: boolean;
+	path?: string;
+}
+
+/* ---------- 本地文件夹直读（原生对话框选目录后由 server 读写该目录）---------- */
+
+export interface LocalFolderEntry {
+	/** 文件名 */
+	name: string;
+	/** 目录内相对路径（/ 分隔） */
+	relPath: string;
+}
+
+export interface LocalFolderList {
+	/** 规范化后的目录绝对路径 */
+	dir: string;
+	mds: LocalFolderEntry[];
+	medias: LocalFolderEntry[];
+}
+
 export interface CreatePostInput {
 	title: string;
 	slug?: string;

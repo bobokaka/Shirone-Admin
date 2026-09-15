@@ -2,6 +2,8 @@
 
 [Shirone](https://github.com/LyraVoid/Shirone) 博客的可视化内容管理工具：本地单机运行、前后端分离，直接读写 [Shirone-Content](https://github.com/LyraVoid/Shirone-Content) 内容仓，AI 辅助写作，一键双仓发布。
 
+网站示例：<https://blogs.evocosmos.com/>
+
 ![博客前台效果](public/assets/images/screenshot-blog.png)
 
 ![管理后台·说说动态](public/assets/images/screenshot-admin.png)
@@ -13,7 +15,7 @@
 - **结构化数据**：项目、技能、时间线、设备、番剧、导航、页脚等 `data/*.ts` 可视化编辑
 - **站点配置**：YAML 最小化覆盖编辑，未声明字段继承主题默认值
 - **AI 助手**：多服务商配置切换（Anthropic / OpenAI 兼容协议，支持中转代理），用于导入改写、提交信息生成、时间线起草、壁纸推荐、音乐联网搜索
-- **内容导入**：简书导出包 / 单篇粘贴、番剧（Bangumi API）、音乐
+- **内容导入**：本地 Markdown 文件、简书导出包 / 单篇粘贴、番剧（Bangumi API）、音乐
 - **一键发布**：双仓 git 提交与推送（内容仓 + 主题仓同步产物），发布前自动跑主题校验（`sync --dry-run`），提交信息自动生成
 - **真站预览**：嵌入主题仓 `astro dev` 实时预览
 

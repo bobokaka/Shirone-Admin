@@ -18,6 +18,8 @@ import type {
 	JianshuPasteOptions,
 	JianshuPasteResult,
 	JianshuPreview,
+	FilePickResult,
+	LocalFolderList,
 	MediaUploadResult,
 	MomentFile,
 	MomentInput,
@@ -96,6 +98,13 @@ export const mediaApi = {
 		form.append("slug", slug);
 		form.append("file", file);
 		return api.upload<MediaUploadResult>("/api/media/post-image", form);
+	},
+	/** 文章公共媒体（视频/音频等）：写 public/assets/posts/<slug>/，返回站根路径 */
+	postAsset: (slug: string, file: File) => {
+		const form = new FormData();
+		form.append("slug", slug);
+		form.append("file", file);
+		return api.upload<MediaUploadResult>("/api/media/post-asset", form);
 	},
 	momentImage: (batchId: string | undefined, file: File) => {
 		const form = new FormData();
@@ -228,6 +237,16 @@ export const bangumiApi = {
 
 /** 平台导入：简书官方导出包 → 会话清单 → 预览 / 后台导入任务轮询 */
 export const importApi = {
+	/** 系统文件对话框选 md（返回绝对路径；按其所在目录解析相对媒体引用） */
+	localPickMd: () => api.post<FilePickResult>("/api/import/local/pick-md", {}),
+	/** 本地文件夹直读：目录内 md 与媒体清单（服务端原生对话框配合） */
+	localList: (dir: string) => api.post<LocalFolderList>("/api/import/local/list", { dir }),
+	/** 本地文件夹内文件的预览直链（md 文本 / 图片 / 视频 / 音频） */
+	localFileUrl: (dir: string, relPath: string) =>
+		`/api/import/local/file?dir=${encodeURIComponent(dir)}&path=${encodeURIComponent(relPath)}`,
+	/** 转换入库：服务端直读本地文件写进文章配图目录或 public 站根 */
+	localCollect: (input: { dir: string; path: string; slug: string }) =>
+		api.post<MediaUploadResult>("/api/import/local/collect", input),
 	/** 上传 rar/zip 导出包，解析出按文集分组的文章清单 */
 	uploadArchive: (file: File) => {
 		const form = new FormData();

@@ -44,7 +44,15 @@ export function localMediaSanitize(html: string, postPath?: string): string {
 		/(<(?:img|video|audio|source)\b[^>]*?\bsrc\s*=\s*)("([^"]*)"|'([^']*)')/gi,
 		(m, head: string, _quoted: string, dq: string, sq: string) => {
 			const s = dq ?? sq ?? "";
-			if (!s || /^(https?:)?\/\//i.test(s) || s.startsWith("data:")) return m;
+			if (
+				!s ||
+				/^(https?:)?\/\//i.test(s) ||
+				s.startsWith("data:") ||
+				s.startsWith("blob:") ||
+				s.startsWith("/api/")
+			) {
+				return m;
+			}
 			if (PROXY_PREFIXES.some((p) => s.startsWith(p))) return m;
 			let u = "";
 			if (postDir && /^(\.{1,2}\/)?images\//.test(s)) {

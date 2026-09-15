@@ -133,6 +133,10 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
 		],
 		bangumi: ["GET /api/bangumi/search", "GET /api/bangumi/subject", "POST /api/bangumi/cover-import"],
 		import: [
+			"POST /api/import/local/pick-md",
+			"POST /api/import/local/list",
+			"GET /api/import/local/file",
+			"POST /api/import/local/collect",
 			"POST /api/import/jianshu/archive",
 			"GET /api/import/jianshu/preview",
 			"POST /api/import/jianshu/run",

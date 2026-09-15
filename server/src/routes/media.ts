@@ -23,6 +23,16 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
 		return storage.uploadPostImage(slug, data.filename, buf);
 	});
 
+	// 文章公共媒体（视频/音频等）：写 public/assets/posts/<slug>/，站根路径供 artplayer / audio-reader 引用
+	app.post("/api/media/post-asset", async (req) => {
+		const data = await req.file();
+		if (!data) throw new ApiError(400, "缺少文件");
+		const slug = fieldText(data.fields, "slug");
+		if (!slug) throw new ApiError(400, "缺少 slug");
+		const buf = await data.toBuffer();
+		return storage.uploadPostAsset(slug, data.filename, buf);
+	});
+
 	// 说说图片：写入 public/images/moments/<批次>/，可传 batchId 归入同批
 	app.post("/api/media/moment-image", async (req) => {
 		const data = await req.file();

@@ -43,7 +43,7 @@
 					<el-icon><Setting /></el-icon>站点设置
 				</el-menu-item>
 				<el-menu-item index="/import">
-					<el-icon><Download /></el-icon>平台导入
+					<el-icon><Download /></el-icon>文章导入
 				</el-menu-item>
 				<el-menu-item index="/publish">
 					<el-icon><Promotion /></el-icon>提交和发布

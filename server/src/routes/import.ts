@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import * as jianshu from "../services/jianshuImport.js";
+import * as localImport from "../services/localImport.js";
+import { pickFile } from "../services/folderPicker.js";
 import { ApiError } from "../lib/errors.js";
 
 /** 平台导入：简书官方导出包（rar/zip）→ 会话清单 → 预览/后台导入任务；另有单篇粘贴（无会话） */
@@ -42,6 +44,33 @@ function query(req: { query: unknown }, keys: string[]): Record<string, string> 
 }
 
 export async function importRoutes(app: FastifyInstance): Promise<void> {
+	// 系统文件对话框选 md 文章：拿到绝对路径后按其所在目录解析相对媒体引用
+	app.post("/api/import/local/pick-md", async () => pickFile("选择 Markdown 文章"));
+
+	// 本地文件夹直读：原生对话框选目录后，server 读写该目录（清单 / 文件预览 / 转换入库）
+	app.post("/api/import/local/list", async (req) => {
+		const b = z.object({ dir: z.string().trim().min(1).max(300) }).parse(req.body);
+		return localImport.listLocalFolder(b.dir);
+	});
+
+	app.get("/api/import/local/file", async (req, reply) => {
+		const { dir, path: rel } = query(req, ["dir", "path"]);
+		const f = await localImport.readLocalFile(dir, rel);
+		reply.type(f.type);
+		return reply.send(f.buf);
+	});
+
+	app.post("/api/import/local/collect", async (req) => {
+		const b = z
+			.object({
+				dir: z.string().trim().min(1).max(300),
+				path: z.string().trim().min(1).max(500),
+				slug: z.string().regex(/^[\w-]+$/, "slug 不合法"),
+			})
+			.parse(req.body);
+		return localImport.collectLocalFile(b.dir, b.path, b.slug);
+	});
+
 	// 上传导出包：解包 + 解析出按文集分组的文章清单
 	app.post("/api/import/jianshu/archive", async (req) => {
 		const data = await req.file();

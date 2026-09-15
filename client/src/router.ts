@@ -32,7 +32,7 @@ export const router = createRouter({
 		{
 			path: "/import",
 			component: () => import("./views/ImportView.vue"),
-			meta: { title: "平台导入" },
+			meta: { title: "文章导入" },
 		},
 		{
 			path: "/settings",

@@ -312,6 +312,11 @@ export async function deletePost(rel: string): Promise<void> {
 		await fs.unlink(abs);
 	}
 	if (doc) await removeNavbarPostLinks(slugOfRel(rel).slug, strOrUndef(doc.permalink));
+	// 文章的公共媒体（视频/音频等，public/assets/posts/<slug>/）随文章一起清理
+	await fs.rm(path.join(PUBLIC_DIR, "assets", "posts", slugOfRel(rel).slug), {
+		recursive: true,
+		force: true,
+	}).catch(() => {});
 }
 
 /* ---------- 说说 ---------- */
@@ -496,6 +501,54 @@ export async function uploadPostImage(slug: string, origName: string, buf: Buffe
 		} catch (e) {
 			if ((e as NodeJS.ErrnoException).code === "EEXIST") {
 				n += 1;
+				continue;
+			}
+			throw e;
+		}
+	}
+}
+
+/** 文章公共媒体（视频/音频）扩展名：写 public/assets/posts/<slug>/，站根路径供 artplayer / audio-reader 指令引用 */
+const POST_ASSET_EXT = new Set([
+	...IMAGE_EXT,
+	".mp4",
+	".webm",
+	".mov",
+	".m4v",
+	".ogv",
+	".mp3",
+	".wav",
+	".ogg",
+	".m4a",
+	".flac",
+	".aac",
+]);
+
+/** 文章公共媒体上传：保留原文件名（仅去非法字符），重名追加序号 */
+export async function uploadPostAsset(
+	slug: string,
+	origName: string,
+	buf: Buffer,
+): Promise<MediaUploadResult> {
+	if (!/^[\w-]+$/.test(slug)) throw new ApiError(400, `slug 不合法：${slug}`);
+	const ext = path.extname(origName).toLowerCase();
+	if (!POST_ASSET_EXT.has(ext)) throw new ApiError(400, `不支持的媒体格式：${ext}`);
+	const base =
+		path
+			.basename(origName, ext)
+			.replace(/[\\/:*?"<>|\s]+/g, "-")
+			.replace(/^-+|-+$/g, "")
+			.slice(0, 60) || "media";
+	const dir = path.join(PUBLIC_DIR, "assets", "posts", slug);
+	await fs.mkdir(dir, { recursive: true });
+	let name = `${base}${ext}`;
+	for (let i = 2; ; i += 1) {
+		try {
+			await fs.writeFile(path.join(dir, name), buf, { flag: "wx" });
+			return { src: `/assets/posts/${slug}/${name}`, fileName: name };
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+				name = `${base}-${i}${ext}`;
 				continue;
 			}
 			throw e;
