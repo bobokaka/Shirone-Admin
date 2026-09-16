@@ -6,9 +6,11 @@ export interface StreamEditInput {
 	maxTokens?: number;
 }
 
-/** chat-stream 的多轮对话输入（system 独立传，messages 只含 user/assistant） */
+/** chat-stream 的会话续话输入：sessionId 续已有会话（上下文在服务端），缺省新建 */
 export interface StreamChatInput {
-	messages: Array<{ role: "user" | "assistant"; content: string }>;
+	sessionId?: string;
+	message: string;
+	/** 仅新建会话时生效（服务端持有，续话时忽略） */
 	system?: string;
 	maxTokens?: number;
 }
@@ -22,6 +24,8 @@ export interface StreamEditResult {
 	content: string;
 	model?: string;
 	completionTokens?: number;
+	/** 本轮所属会话：后续追问只传它 + 新指令，历史由服务端持有 */
+	sessionId?: string;
 }
 
 /**
@@ -77,12 +81,18 @@ async function consumeSse(res: Response, handlers: StreamHandlers): Promise<Stre
 			content?: string;
 			model?: string;
 			completionTokens?: number;
+			sessionId?: string;
 			message?: string;
 		};
 		if (evt.type === "thinking" && evt.text) handlers.onThinking?.(evt.text);
 		else if (evt.type === "text" && evt.text) handlers.onText?.(evt.text);
 		else if (evt.type === "done") {
-			state.result = { content: evt.content ?? "", model: evt.model, completionTokens: evt.completionTokens };
+			state.result = {
+				content: evt.content ?? "",
+				model: evt.model,
+				completionTokens: evt.completionTokens,
+				sessionId: evt.sessionId,
+			};
 		} else if (evt.type === "error") {
 			throw new ApiError(502, evt.message ?? "AI 流式调用失败");
 		}
@@ -98,7 +108,7 @@ export function streamEdit(
 	return postStream("/api/ai/edit-stream", input, handlers, signal);
 }
 
-/** 流式多轮对话：完整历史一次带上，追问上下文在服务端由模型自行衔接 */
+/** 流式会话续话：只传 sessionId + 新消息，历史由服务端从会话文件组装 */
 export function streamChat(
 	input: StreamChatInput,
 	handlers: StreamHandlers,

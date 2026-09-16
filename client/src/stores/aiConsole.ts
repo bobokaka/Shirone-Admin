@@ -1,18 +1,18 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { streamChat, streamEdit, type StreamEditInput } from "../api/stream";
+import { streamChat, streamEdit, type StreamEditInput, type StreamEditResult } from "../api/stream";
 
 /**
- * AI 流式控制台：全局唯一，兼具两种形态——
+ * AI 流式控制台：全局唯一，兼具三种形态——
  * 任务（run）：编辑器/说说等写作入口，开场即清空旧对话，完成把全文返回调用方；
- * 对话（send）：任务结束后或随时打开，多轮追问，历史在本地拼接后整段上送。
+ * 对话（send）：任务结束后或随时打开，多轮追问/自由聊天；
+ * 续改（revise）：拿任务结果继续下指令，AI 基于上一轮结果再改一版全文。
+ * 上下文由服务端会话持有：run 首轮把全文传一次，之后 send/revise 只传 sessionId + 新指令。
  */
 
 /** 单条思考流滚动保留上限：超出掐头续尾，防长思考撑爆 DOM */
 const THINKING_CAP = 8000;
-/** 追问上送的历史预算（字符）：超预算从最旧的消息开始丢弃，最近的上下文始终保留 */
-const HISTORY_BUDGET = 60_000;
 
 export interface AiConsoleEntry {
 	id: number;
@@ -37,6 +37,8 @@ const CHAT_SYSTEM =
 export const useAiConsoleStore = defineStore("aiConsole", () => {
 	const visible = ref(false);
 	const entries = ref<AiConsoleEntry[]>([]);
+	/** 当前会话 ID（服务端持有上下文）：任务首轮建立，追问/续改复用；null = 无会话 */
+	const sessionId = ref<string | null>(null);
 	const running = ref(false);
 	/** 当前流式任务的耗时（头部实时跳动），结束时落到对应条目上 */
 	const elapsedMs = ref(0);
@@ -127,25 +129,14 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		if (autoCollapse) collapsed.value = true;
 	}
 
-	/**
-	 * 任务入口：清空旧对话、打开面板并流式执行；完成返回 trim 后全文，停止/失败返回 null。
-	 * onText 每次收到增量后回调「累计全文」，供调用方做流式 diff 等实时展示（节流由调用方负责）。
-	 */
-	async function run(
-		runTitle: string,
-		input: StreamEditInput,
-		opts?: { onText?: (full: string) => void },
-	): Promise<string | null> {
-		if (running.value) {
-			ElMessage.warning("已有 AI 任务进行中，请先停止或等待完成");
-			return null;
-		}
-		// 任务即新对话：不携带上一个任务的上下文
-		entries.value = [];
-		appendUser(runTitle, `指令：${input.instruction}\n\n文本：\n${input.text}`);
+	/** 开启一轮流式：登记消息、起表；silent 不自动弹出面板（抽屉内标签/摘要等小任务用）；返回 assistant 条目 */
+	function beginTurn(display: string, send?: string, silent = false): AiConsoleEntry {
+		appendUser(display, send);
 		const entry = appendAssistant();
-		visible.value = true;
-		collapsed.value = false;
+		if (!silent) {
+			visible.value = true;
+			collapsed.value = false;
+		}
 		running.value = true;
 		controller = new AbortController();
 		startedAt = Date.now();
@@ -154,20 +145,60 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		timer = setInterval(() => {
 			elapsedMs.value = Date.now() - startedAt;
 		}, 1000);
+		return entry;
+	}
+
+	/** 流式轮公共执行：成功登记会话与模型并返回全文，停止/失败返回 null */
+	async function runTurn(
+		entry: AiConsoleEntry,
+		exec: (
+			handlers: { onThinking(text: string): void; onText(text: string): void },
+			signal: AbortSignal,
+		) => Promise<StreamEditResult>,
+		onText: ((full: string) => void) | undefined,
+		autoCollapse: boolean,
+	): Promise<string | null> {
 		try {
-			const result = await streamEdit(input, wireStream(entry, opts?.onText), controller.signal);
+			const result = await exec(wireStream(entry, onText), controller?.signal as AbortSignal);
 			entry.model = result.model ?? "";
+			if (result.sessionId) sessionId.value = result.sessionId;
 			return result.content.trim();
 		} catch (e) {
 			if ((e as Error).name === "AbortError") entry.stopped = true;
 			else entry.error = (e as Error).message;
 			return null;
 		} finally {
-			finishStream(entry, true);
+			finishStream(entry, autoCollapse);
 		}
 	}
 
-	/** 对话入口：携带此前任务/对话的历史，流式回答；返回全文或 null（停止/失败） */
+	/**
+	 * 任务入口：清空旧对话、开新会话并流式执行；完成返回 trim 后全文，停止/失败返回 null。
+	 * onText 每次收到增量后回调「累计全文」，供调用方做流式 diff 等实时展示（节流由调用方负责）。
+	 * silent：不自动弹出面板，仅记录日志（调用方自行做 loading 态，手动打开面板仍可看进度/停止）。
+	 */
+	async function run(
+		runTitle: string,
+		input: StreamEditInput,
+		opts?: { onText?: (full: string) => void; silent?: boolean },
+	): Promise<string | null> {
+		if (running.value) {
+			ElMessage.warning("已有 AI 任务进行中，请先停止或等待完成");
+			return null;
+		}
+		// 任务即新对话：不携带上一个任务的上下文
+		entries.value = [];
+		sessionId.value = null;
+		const entry = beginTurn(runTitle, `指令：${input.instruction}\n\n文本：\n${input.text}`, opts?.silent);
+		return runTurn(
+			entry,
+			(handlers, signal) => streamEdit(input, handlers, signal),
+			opts?.onText,
+			true,
+		);
+	}
+
+	/** 对话入口：续当前会话追问（上下文在服务端），流式回答；返回全文或 null（停止/失败） */
 	async function send(text: string): Promise<string | null> {
 		const question = text.trim();
 		if (question === "") return null;
@@ -176,58 +207,51 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 			return null;
 		}
 		draft.value = "";
-		appendUser(question);
-		const entry = appendAssistant();
-		visible.value = true;
-		collapsed.value = false;
-		running.value = true;
-		controller = new AbortController();
-		startedAt = Date.now();
-		elapsedMs.value = 0;
-		stopTimer();
-		timer = setInterval(() => {
-			elapsedMs.value = Date.now() - startedAt;
-		}, 1000);
-		try {
-			const result = await streamChat(
-				{ messages: buildHistory(), system: CHAT_SYSTEM },
-				wireStream(entry),
-				controller.signal,
-			);
-			entry.model = result.model ?? "";
-			return result.content.trim();
-		} catch (e) {
-			if ((e as Error).name === "AbortError") entry.stopped = true;
-			else entry.error = (e as Error).message;
-			return null;
-		} finally {
-			finishStream(entry, false);
-		}
+		const entry = beginTurn(question);
+		return runTurn(
+			entry,
+			(handlers, signal) =>
+				streamChat({ sessionId: sessionId.value ?? undefined, message: question, system: CHAT_SYSTEM }, handlers, signal),
+			undefined,
+			false,
+		);
 	}
 
-	/** 从最新往回收历史：超预算即截断最旧部分（任务首条常是整篇全文，最占预算） */
-	function buildHistory(): Array<{ role: "user" | "assistant"; content: string }> {
-		const picked: Array<{ role: "user" | "assistant"; content: string }> = [];
-		let total = CHAT_SYSTEM.length;
-		for (let i = entries.value.length - 1; i >= 0; i -= 1) {
-			const e = entries.value[i];
-			if (e.role === "assistant" && (e.content === "" || e.error)) continue;
-			const content = e.role === "user" ? (e.send ?? e.content) : e.content;
-			total += content.length;
-			if (total > HISTORY_BUDGET && picked.length > 0) break;
-			picked.unshift({ role: e.role, content });
+	/**
+	 * 续改入口：对当前会话上一轮的结果继续下指令，AI 输出修改后的完整正文。
+	 * 返回全文供调用方替换展示（diff 右列等）；无会话/停止/失败返回 null。
+	 */
+	async function revise(text: string, opts?: { onText?: (full: string) => void }): Promise<string | null> {
+		const instruction = text.trim();
+		if (instruction === "") return null;
+		if (running.value) {
+			ElMessage.warning("已有 AI 任务进行中，请先停止或等待完成");
+			return null;
 		}
-		return picked;
+		if (!sessionId.value) {
+			ElMessage.warning("会话已失效，请重新发起 AI 任务");
+			return null;
+		}
+		const message = `继续修改：${instruction}\n\n请在上一轮结果的基础上按上述要求修改，输出修改后的完整正文，不要任何解释、前后缀或代码围栏。`;
+		const entry = beginTurn(instruction, message);
+		return runTurn(
+			entry,
+			(handlers, signal) =>
+				streamChat({ sessionId: sessionId.value ?? undefined, message, maxTokens: 16384 }, handlers, signal),
+			opts?.onText,
+			false,
+		);
 	}
 
 	function stop(): void {
 		controller?.abort();
 	}
 
-	/** 新对话：清空消息与输入（运行中先停止） */
+	/** 新对话：清空消息、输入与会话（运行中先停止） */
 	function newTalk(): void {
 		if (running.value) stop();
 		entries.value = [];
+		sessionId.value = null;
 		draft.value = "";
 		collapsed.value = false;
 	}
@@ -254,6 +278,7 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 	return {
 		visible,
 		entries,
+		sessionId,
 		running,
 		elapsedMs,
 		draft,
@@ -262,6 +287,7 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		statusLabel,
 		run,
 		send,
+		revise,
 		stop,
 		newTalk,
 		close,

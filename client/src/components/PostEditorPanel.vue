@@ -7,7 +7,7 @@
 	import type { AiSettings, PostFile, PostMeta } from "@shirone-admin/shared";
 	import { aiApi, mediaApi, postApi } from "../api";
 	import { useAiConsoleStore } from "../stores/aiConsole";
-	import { localMediaSanitize } from "../utils/content-media";
+	import { localMediaSanitize, previewUrlOf } from "../utils/content-media";
 	import { sideBySideDiff, type DiffRow } from "../utils/diff";
 
 	/**
@@ -36,8 +36,21 @@
 	const drawerVisible = ref(false);
 
 	const title = ref("");
-	const published = ref("");
-	const publishedAt = ref<string | null>(null);
+	/** 发布日期（只读，YYYY-MM-DDTHH:mm:ss）：实际值由后端在发布那一刻盖戳，前端仅展示 */
+	const publishedAt = ref("");
+	/** 只读展示格式：2026-09-16 08:30:25 */
+	const publishedDisplay = computed(() => publishedAt.value.replace("T", " "));
+	/** 封面预览直链：文章相对 images/ 走 /content-posts 代理，其余按通用规则换算 */
+	const coverPreview = computed(() => {
+		const s = image.value.trim();
+		if (!s || /^(https?:)?\/\//i.test(s) || s.startsWith("data:")) return s;
+		const dir = props.path
+			.replace(/\\/g, "/")
+			.replace(/\/index\.md$/, "")
+			.replace(/\.md$/, "");
+		if (/^(\.{1,2}\/)?images\//.test(s)) return `/content-posts/${dir}/${s.replace(/^(\.{1,2}\/)?/, "")}`;
+		return previewUrlOf(s);
+	});
 	const description = ref("");
 	const image = ref("");
 	const category = ref("");
@@ -49,10 +62,6 @@
 	const hideHomeContent = ref(true);
 	const passwordHint = ref("");
 	const password = ref("");
-	const alias = ref("");
-	const permalink = ref("");
-	/** 访问路径方式：默认 /posts/slug/、别名 /posts/<别名>/、根路径 /<固定链接>/ */
-	const linkMode = ref<"default" | "alias" | "permalink">("default");
 	const body = ref("");
 
 	const slug = ref("");
@@ -71,18 +80,6 @@
 
 	const categoryOptions = computed(() => countBy(allPosts.value.map((p) => p.category)));
 	const tagOptions = computed(() => countBy(allPosts.value.flatMap((p) => p.tags)));
-
-	/** 去首尾空白与斜杠；空值返回空串（server 收到空串即清除该键） */
-	function cleanPath(v: string): string {
-		return v.trim().replace(/^\/+|\/+$/g, "");
-	}
-
-	/** 当前访问地址预览 */
-	const linkPreview = computed(() => {
-		if (linkMode.value === "permalink") return `/${cleanPath(permalink.value) || "…"}/`;
-		if (linkMode.value === "alias") return `/posts/${cleanPath(alias.value) || "…"}/`;
-		return `/posts/${slug.value || "文章名"}/`;
-	});
 
 	/** 同一时刻只挂载一个编辑器，id 区分就地编辑与完整页便于排查 */
 	const editorId = computed(() => (props.expandable ? "post-inline-editor" : "post-editor"));
@@ -257,6 +254,19 @@
 	/** 服务端 /api/ai/edit 的单次文本上限（字符） */
 	const AI_TEXT_LIMIT = 100_000;
 
+	/** AI 处理正文的统一前置检查：空文/超限提示；通过返回 true */
+	function checkAiBody(): boolean {
+		if (body.value.trim() === "") {
+			ElMessage.warning("正文为空，先写点什么再让 AI 处理");
+			return false;
+		}
+		if (body.value.length > AI_TEXT_LIMIT) {
+			ElMessage.warning(`正文超过 ${AI_TEXT_LIMIT} 字符，超出 AI 单次处理上限`);
+			return false;
+		}
+		return true;
+	}
+
 	/**
 	 * 全文改写类公共流程：先开 diff 弹窗，AI 结果流式刷进右列（节流 200ms），
 	 * 完成后启用应用并跳到第一处变更；停止但已有产出时保留查看（不允许应用）。
@@ -295,16 +305,67 @@
 		aiPreview.value = null;
 	}
 
+	/** 续改输入：diff 弹窗内对 AI 结果继续下指令，右列流式刷新为最新版 */
+	const aiFollowup = ref("");
+
+	function onFollowupKey(e: KeyboardEvent): void {
+		// 中文输入法组词确认的 Enter 不触发发送
+		if (e.isComposing || e.shiftKey) return;
+		e.preventDefault();
+		void doFollowup();
+	}
+
+	async function doFollowup(): Promise<void> {
+		const text = aiFollowup.value.trim();
+		if (text === "" || aiPreview.value?.streaming) return;
+		aiFollowup.value = "";
+		await continuePreviewAction(text);
+	}
+
+	/**
+	 * 续改公共流程：基于服务端会话的上一轮结果继续修改，流式期间右列实时刷新，
+	 * 完成后 diff（仍对比首轮原文）替换为最新全文；停止保留半成品，失败回退上一版。
+	 */
+	async function continuePreviewAction(instruction: string): Promise<void> {
+		const prev = aiPreview.value;
+		if (!prev || prev.streaming) return;
+		const fallback = prev.result;
+		prev.streaming = true;
+		prev.stopped = false;
+		let live = "";
+		let flushTimer: ReturnType<typeof setTimeout> | null = null;
+		const result = await aiConsole.revise(instruction, {
+			onText: (full) => {
+				live = full;
+				if (!flushTimer) {
+					flushTimer = setTimeout(() => {
+						flushTimer = null;
+						if (aiPreview.value) aiPreview.value.result = live;
+					}, 200);
+				}
+			},
+		});
+		if (flushTimer) clearTimeout(flushTimer);
+		// 流式期间用户已放弃/关闭弹窗：不再恢复
+		if (aiPreview.value === null) return;
+		expandedFolds.value = new Set();
+		currentChange.value = 0;
+		if (result !== null) {
+			aiPreview.value = { ...prev, result, streaming: false, stopped: false };
+			jumpFirstChange();
+			return;
+		}
+		if (live.trim() !== "" && aiConsole.lastOutcome === "stopped") {
+			aiPreview.value = { ...prev, result: live, streaming: false, stopped: true };
+			return;
+		}
+		// 失败：错误已在控制台展示，弹窗回退上一版完整结果
+		aiPreview.value = { ...prev, result: fallback, streaming: false, stopped: false };
+	}
+
 	async function runAiAction(id: AiAction): Promise<void> {
 		if (aiRunning.value) return;
-		if (body.value.trim() === "") {
-			ElMessage.warning("正文为空，先写点什么再让 AI 处理");
-			return;
-		}
-		if (body.value.length > AI_TEXT_LIMIT) {
-			ElMessage.warning(`正文超过 ${AI_TEXT_LIMIT} 字符，超出 AI 单次处理上限`);
-			return;
-		}
+		if (!checkAiBody()) return;
 		aiMenuVisible.value = false;
 		const selected = (editorRef.value?.getSelectedText() ?? "").trim();
 		// 全走流式控制台：思考/正文实时上屏、可随时停止；null 即停止/失败，原文不动
@@ -313,8 +374,8 @@
 		if (id === "improve" || id === "format") {
 			const isImprove = id === "improve";
 			const instruction = isImprove
-				? "完善这篇 Markdown 文章：补全论述缺口、增强逻辑衔接与技术细节的准确性，保留原有观点、语气、代码与私有扩展语法（三冒号容器、file-tree 等原样保留）。输出完善后的完整正文。"
-				: "优化这篇 Markdown 文章的格式：规范标题层级、列表与引用格式、统一中英文标点与空格、补全代码围栏语言标注、修正排版问题，不改动内容表述。输出完整正文。";
+				? "完善这篇 Markdown 文章：补全论述缺口、增强逻辑衔接与技术细节的准确性。表达生动、易读、易懂、有传播力：抽象概念用通俗类比讲清并精确点明核心意义，杜绝大段堆砌文字——长段落拆成短段、列表或表格，关键结论加粗，适合的流程或关系用 mermaid 图（```mermaid 代码围栏）呈现。标题层级统一用 1、1.1、1.1.1 式编号（如 ## 1. 标题、### 1.1 标题），层级与编号严格对应。保留原有观点、语气、代码、图片引用与私有扩展语法（三冒号容器、file-tree 等原样保留）。输出完善后的完整正文。"
+				: "优化这篇 Markdown 文章的格式，不改动内容表述：标题层级统一为 1、1.1、1.1.1 式编号（如 ## 1. 标题、### 1.1 标题），层级与编号严格对应；大段文字拆分为短段、列表或表格，关键信息加粗突出；规范列表与引用格式、统一中英文标点与空格、补全代码围栏语言标注、修正排版问题。输出完整正文。";
 			await runPreviewAction(isImprove ? "完善内容" : "格式优化", instruction, 16384);
 			return;
 		}
@@ -322,7 +383,8 @@
 		if (id === "polish") {
 			if (selected !== "") {
 				result = await aiConsole.run("AI润色（选中）", {
-					instruction: "润色以下文字：表达更流畅自然，保留原意与技术准确性，只输出润色结果。",
+					instruction:
+						"润色以下文字：表达更流畅自然、生动易读，抽象表述改为通俗说法并精确点明核心意义，保留原意与技术准确性，只输出润色结果。",
 					text: selected,
 					maxTokens: 8192,
 				});
@@ -334,7 +396,7 @@
 			} else {
 				await runPreviewAction(
 					"润色",
-					"润色这篇 Markdown 文章：表达更流畅自然，保留原意、代码与私有扩展语法，输出完整正文。",
+					"润色这篇 Markdown 文章：表达更流畅自然、生动易读、易懂，抽象表述改为通俗说法并精确点明核心意义，避免大段堆砌文字（长段拆短段、列表、关键处加粗），标题层级统一为 1、1.1、1.1.1 式编号；保留原意、代码与私有扩展语法，输出完整正文。",
 					16384,
 				);
 			}
@@ -344,7 +406,7 @@
 		if (id === "continue") {
 			result = await aiConsole.run("AI续写", {
 				instruction:
-					"续写这篇文章：从当前结尾自然延续，保持语气、人称与 Markdown 格式一致，只输出续写的新内容，不要重复已有内容。",
+					"续写这篇文章：从当前结尾自然延续，保持语气、人称与 Markdown 格式一致，延续正文的标题编号体系（1、1.1、1.1.1 式）与生动易读的风格（短段、列表、关键处加粗，忌大段堆砌文字），只输出续写的新内容，不要重复已有内容。",
 				text: body.value,
 				maxTokens: 8192,
 			});
@@ -356,26 +418,7 @@
 		}
 
 		if (id === "summary") {
-			result = await aiConsole.run("AI生成摘要", {
-				instruction: "为这篇文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
-				text: body.value,
-				maxTokens: 1024,
-			});
-			if (result === null) return;
-			if (description.value.trim() !== "") {
-				try {
-					await ElMessageBox.confirm("文章信息中的摘要已有内容，覆盖为 AI 摘要？", "生成摘要", {
-						type: "warning",
-						confirmButtonText: "覆盖",
-						cancelButtonText: "取消",
-					});
-				} catch {
-					return; // 用户取消
-				}
-			}
-			description.value = result;
-			drawerVisible.value = true;
-			ElMessage.success("摘要已回填文章信息");
+			if (await aiGenerateSummary()) drawerVisible.value = true;
 			return;
 		}
 
@@ -411,12 +454,141 @@
 		}
 	}
 
+	/** 抽屉内静默生成（不弹 AI 面板）：标签/摘要按钮的 loading 态 */
+	const drawerAiBusy = ref<"tags" | "summary" | null>(null);
+
+	/** 静默任务失败/停止的轻提示（面板未弹出，详情在 AI 助手里查看） */
+	function notifySilentFailure(): void {
+		if (aiConsole.lastOutcome === "error") ElMessage.error("AI 生成失败，可打开 AI 助手查看详情");
+		else if (aiConsole.lastOutcome === "stopped") ElMessage.info("已停止生成");
+	}
+
+	/** AI 生成摘要回填文章信息（编辑器工具栏与信息抽屉共用）；静默执行不弹 AI 面板，返回是否成功回填 */
+	async function aiGenerateSummary(): Promise<boolean> {
+		if (!checkAiBody()) return false;
+		drawerAiBusy.value = "summary";
+		try {
+			const result = await aiConsole.run(
+				"AI生成摘要",
+				{
+					instruction:
+						"为这篇文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
+					text: body.value,
+					maxTokens: 1024,
+				},
+				{ silent: true },
+			);
+			if (result === null) {
+				notifySilentFailure();
+				return false;
+			}
+			if (description.value.trim() !== "") {
+				try {
+					await ElMessageBox.confirm("文章信息中的摘要已有内容，覆盖为 AI 摘要？", "生成摘要", {
+						type: "warning",
+						confirmButtonText: "覆盖",
+						cancelButtonText: "取消",
+					});
+				} catch {
+					return false; // 用户取消
+				}
+			}
+			description.value = result;
+			ElMessage.success("摘要已回填文章信息");
+			return true;
+		} finally {
+			drawerAiBusy.value = null;
+		}
+	}
+
+	/** AI 生成标签回填文章信息：静默执行不弹 AI 面板；先匹配全站现有标签，不足以概括时才新增；已有标签需确认覆盖 */
+	async function aiGenerateTags(): Promise<void> {
+		if (!checkAiBody()) return;
+		const pool = tagOptions.value.map((t) => t.name);
+		const poolNote =
+			pool.length > 0
+				? `全站现有标签：${pool.join("、")}。优先从中挑选贴合本文的（保持标签体系一致、避免同义重复），仅当现有标签不足以概括本文时才新增。`
+				: "全站暂无标签，直接新建。";
+		drawerAiBusy.value = "tags";
+		try {
+			const result = await aiConsole.run(
+				"AI生成标签",
+				{
+					instruction: `为这篇 Markdown 文章生成 3-6 个标签。${poolNote}中文为主，通用技术名词可用英文（如 TypeScript）。只输出标签本身，用逗号分隔，不要编号、引号或解释。`,
+					text: body.value,
+					maxTokens: 512,
+				},
+				{ silent: true },
+			);
+			if (result === null) {
+				notifySilentFailure();
+				return;
+			}
+			const parsed = [
+				...new Set(
+					result
+						.split(/[\n,，、;；]/)
+						.map((t) =>
+							t
+								.replace(/^\s*(?:[-*•]|\d+[.、)])\s*/, "")
+								.replace(/^["'「]|["'」]$/g, "")
+								.trim(),
+						)
+						.filter((t) => t !== ""),
+				),
+			];
+			if (parsed.length === 0) {
+				ElMessage.warning("AI 未返回有效标签");
+				return;
+			}
+			if (tags.value.length > 0) {
+				try {
+					await ElMessageBox.confirm(`标签已有内容，覆盖为 AI 生成的 ${parsed.length} 个标签？`, "生成标签", {
+						type: "warning",
+						confirmButtonText: "覆盖",
+						cancelButtonText: "取消",
+					});
+				} catch {
+					return; // 用户取消
+				}
+			}
+			tags.value = parsed;
+			ElMessage.success("标签已回填文章信息");
+		} finally {
+			drawerAiBusy.value = null;
+		}
+	}
+
+	/** 封面自动生成＝取正文第一张图（Markdown 或 HTML img），没有就留空 */
+	async function autoPickCover(): Promise<void> {
+		const src =
+			body.value.match(/!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+[^)]*)?\)/)?.[1] ??
+			body.value.match(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/i)?.[1] ??
+			"";
+		if (src === "") {
+			ElMessage.warning("正文中没有图片，封面留空");
+			return;
+		}
+		if (image.value.trim() !== "" && image.value.trim() !== src) {
+			try {
+				await ElMessageBox.confirm("封面已设置，替换为正文第一张图片？", "自动封面", {
+					type: "warning",
+					confirmButtonText: "替换",
+					cancelButtonText: "取消",
+				});
+			} catch {
+				return; // 用户取消
+			}
+		}
+		image.value = src;
+		ElMessage.success("封面已取正文第一张图片");
+	}
+
 	function fill(p: PostFile): void {
 		post.value = p;
 		slug.value = p.meta.slug;
 		title.value = p.meta.title;
-		published.value = p.meta.published;
-		publishedAt.value = p.meta.publishedAt ?? null;
+		publishedAt.value = mergePublished(p.meta.published, p.meta.publishedAt);
 		description.value = p.meta.description;
 		image.value = p.meta.image;
 		category.value = p.meta.category;
@@ -427,9 +599,6 @@
 		encrypted.value = p.meta.encrypted;
 		hideHomeContent.value = p.meta.hideHomeContent;
 		passwordHint.value = p.meta.passwordHint;
-		alias.value = p.meta.alias ?? "";
-		permalink.value = p.meta.permalink ?? "";
-		linkMode.value = p.meta.permalink ? "permalink" : p.meta.alias ? "alias" : "default";
 		body.value = p.body;
 	}
 
@@ -453,14 +622,10 @@
 			.catch(() => {});
 	});
 
-	/** publishedAt 的日期部分始终跟随 published（Asia/Shanghai +08:00），消除主题的时区硬校验失败 */
-	function normalizedPublishedAt(): string | undefined {
-		if (!publishedAt.value) return undefined;
-		const m = publishedAt.value.match(/T(\d{2}):(\d{2})(?::(\d{2}))?/);
-		const hh = m?.[1] ?? "10";
-		const mm = m?.[2] ?? "00";
-		const ss = m?.[3] ?? "00";
-		return `${published.value}T${hh}:${mm}:${ss}+08:00`;
+	/** 读取时合并：published 日期 + publishedAt 时间（缺省 00:00:00）→ 单一「发布日期」字段 */
+	function mergePublished(date: string, at?: string): string {
+		const t = at?.match(/T(\d{2}):(\d{2})(?::(\d{2}))?/);
+		return `${date.slice(0, 10)}T${t?.[1] ?? "00"}:${t?.[2] ?? "00"}:${t?.[3] ?? "00"}`;
 	}
 
 	async function save(silent = false): Promise<boolean> {
@@ -483,8 +648,6 @@
 				clearPassword: !encrypted.value,
 				meta: {
 					title: title.value,
-					published: published.value,
-					publishedAt: normalizedPublishedAt() ?? "",
 					description: description.value,
 					image: image.value,
 					category: category.value,
@@ -495,9 +658,6 @@
 					encrypted: encrypted.value,
 					hideHomeContent: hideHomeContent.value,
 					passwordHint: passwordHint.value,
-					// 两键始终显式传值：非当前模式的键传空串，server 会清除旧值
-					alias: linkMode.value === "alias" ? cleanPath(alias.value) : "",
-					permalink: linkMode.value === "permalink" ? cleanPath(permalink.value) : "",
 					updated: filled.meta.updated ?? "",
 					updatedAt: filled.meta.updatedAt ?? "",
 				},
@@ -715,27 +875,45 @@
 		</div>
 
 		<el-drawer v-model="drawerVisible" title="文章信息" size="480px">
-			<div class="drawer-meta muted">{{ path }}</div>
 			<el-form label-position="top" class="drawer-form">
 				<el-form-item label="发布日期">
-					<el-date-picker
-						v-model="published"
-						type="date"
-						value-format="YYYY-MM-DD"
-						style="width: 100%"
-					/>
+					<div class="published-ro">
+						<el-icon><Icon icon="material-symbols:calendar-month" /></el-icon>
+						<span>{{ publishedDisplay }}</span>
+					</div>
 				</el-form-item>
-				<el-form-item label="精确时间">
-					<el-date-picker
-						v-model="publishedAt"
-						type="datetime"
-						value-format="YYYY-MM-DDTHH:mm:ssZ"
-						placeholder="同日多篇排序用"
-						style="width: 100%"
+				<el-form-item label="分类">
+					<el-select
+						v-model="category"
+						filterable
+						allow-create
+						default-first-option
 						clearable
-					/>
+						placeholder="选择已有分类，或输入新建"
+						style="width: 100%"
+					>
+						<el-option v-for="c in categoryOptions" :key="c.name" :value="c.name" :label="c.name">
+							<span>{{ c.name }}</span>
+							<span class="opt-count">{{ c.n }} 篇</span>
+						</el-option>
+					</el-select>
 				</el-form-item>
-				<el-form-item label="标签">
+				<el-form-item>
+					<template #label>
+						<span class="label-row">
+							标签
+							<button
+								v-if="aiOn"
+								type="button"
+								class="ai-gen-btn"
+								:disabled="aiRunning"
+								@click="aiGenerateTags"
+							>
+								<el-icon v-if="drawerAiBusy === 'tags'" class="is-loading"><Loading /></el-icon>
+								<el-icon v-else><Icon icon="material-symbols:auto-awesome" /></el-icon>AI 生成
+							</button>
+						</span>
+					</template>
 					<el-select
 						v-model="tags"
 						multiple
@@ -752,10 +930,33 @@
 						</el-option>
 					</el-select>
 				</el-form-item>
-				<el-form-item label="摘要">
+				<el-form-item>
+					<template #label>
+						<span class="label-row">
+							摘要
+							<button
+								v-if="aiOn"
+								type="button"
+								class="ai-gen-btn"
+								:disabled="aiRunning"
+								@click="aiGenerateSummary"
+							>
+								<el-icon v-if="drawerAiBusy === 'summary'" class="is-loading"><Loading /></el-icon>
+								<el-icon v-else><Icon icon="material-symbols:auto-awesome" /></el-icon>AI 生成
+							</button>
+						</span>
+					</template>
 					<el-input v-model="description" type="textarea" :rows="2" placeholder="留空自动截取正文前段" />
 				</el-form-item>
-				<el-form-item label="封面">
+				<el-form-item>
+					<template #label>
+						<span class="label-row">
+							封面
+							<button type="button" class="ai-gen-btn" @click="autoPickCover">
+								<el-icon><Icon icon="material-symbols:image-search" /></el-icon>取正文首图
+							</button>
+						</span>
+					</template>
 					<el-input v-model="image" placeholder="./images/cover.webp 或外链">
 						<template #append>
 							<label class="cover-upload">
@@ -769,66 +970,41 @@
 							</label>
 						</template>
 					</el-input>
-				</el-form-item>
-				<el-form-item label="开关">
-					<el-checkbox v-model="draft">草稿</el-checkbox>
-					<el-select
-						v-model="category"
-						filterable
-						allow-create
-						default-first-option
-						clearable
-						placeholder="分类"
-						class="switch-category"
-					>
-						<el-option v-for="c in categoryOptions" :key="c.name" :value="c.name" :label="c.name">
-							<span>{{ c.name }}</span>
-							<span class="opt-count">{{ c.n }} 篇</span>
-						</el-option>
-					</el-select>
-					<el-checkbox v-model="pinned">置顶</el-checkbox>
-					<el-checkbox v-model="comment">评论</el-checkbox>
-					<el-checkbox v-model="encrypted">加密</el-checkbox>
-				</el-form-item>
-				<template v-if="encrypted">
-					<el-form-item label="访问密码">
-						<el-input
-							v-model="password"
-							:placeholder="post?.meta.hasPassword ? '已设置，输入则修改' : '设置访问密码'"
-							clearable
-						/>
-					</el-form-item>
-					<el-form-item label="密码提示">
-						<el-input v-model="passwordHint" />
-					</el-form-item>
-					<el-form-item label="首页卡片隐藏预览">
-						<el-switch v-model="hideHomeContent" />
-					</el-form-item>
-				</template>
-				<el-form-item label="访问路径">
-					<div class="link-mode">
-						<el-radio-group v-model="linkMode">
-							<el-radio value="default">默认（/posts/文章名/）</el-radio>
-							<el-radio value="alias">自定义别名（/posts/别名/）</el-radio>
-							<el-radio value="permalink">根路径固定链接（/自定义路径/）</el-radio>
-						</el-radio-group>
-						<el-input
-							v-if="linkMode === 'alias'"
-							v-model="alias"
-							placeholder="如 hello，访问 /posts/hello/"
-						>
-							<template #prepend>/posts/</template>
-						</el-input>
-						<el-input
-							v-if="linkMode === 'permalink'"
-							v-model="permalink"
-							placeholder="如 notes/foo，访问 /notes/foo/"
-						>
-							<template #prepend>/</template>
-						</el-input>
-						<div class="muted link-preview">当前访问地址：{{ linkPreview }}</div>
+					<div v-if="coverPreview" class="cover-preview">
+						<img :src="coverPreview" alt="封面预览" />
 					</div>
 				</el-form-item>
+
+				<div class="drawer-divider" />
+
+				<div class="switch-row">
+					<span class="switch-label">
+						<el-icon><Icon icon="material-symbols:forum-outline" /></el-icon>允许评论
+					</span>
+					<el-switch v-model="comment" />
+				</div>
+
+				<div class="encrypt-card" :class="{ 'is-on': encrypted }">
+					<div class="switch-row head">
+						<span class="switch-label">
+							<el-icon><Icon icon="material-symbols:lock" /></el-icon>加密访问
+						</span>
+						<el-switch v-model="encrypted" />
+					</div>
+					<template v-if="encrypted">
+						<el-input
+							v-model="password"
+							show-password
+							clearable
+							:placeholder="post?.meta.hasPassword ? '已设置，输入则修改' : '设置访问密码'"
+						/>
+						<el-input v-model="passwordHint" placeholder="密码提示（公开可见）" />
+						<div class="switch-row sub">
+							<span class="switch-label">首页卡片隐藏预览</span>
+							<el-switch v-model="hideHomeContent" />
+						</div>
+					</template>
+				</div>
 			</el-form>
 			<template #footer>
 				<el-button @click="drawerVisible = false">收起</el-button>
@@ -931,6 +1107,26 @@
 					</span>
 				</div>
 			</div>
+			<!-- 续改：带着服务端会话继续下指令，右列流式替换为最新版（diff 始终对比首轮原文） -->
+			<div class="ai-followup">
+				<el-input
+					v-model="aiFollowup"
+					type="textarea"
+					:rows="1"
+					:autosize="{ minRows: 1, maxRows: 4 }"
+					resize="none"
+					placeholder="继续对话修改，如「再精简一点」「第二段展开讲讲」…（Enter 发送，Shift+Enter 换行）"
+					:disabled="aiPreview?.streaming || !aiConsole.sessionId"
+					@keydown.enter="onFollowupKey"
+				/>
+				<el-button
+					type="primary"
+					:disabled="aiPreview?.streaming || !aiConsole.sessionId || aiFollowup.trim() === ''"
+					@click="doFollowup"
+				>
+					继续修改
+				</el-button>
+			</div>
 			<template #footer>
 				<el-button :disabled="aiPreview?.streaming || !aiPreview?.result" @click="copyAiResult">
 					复制结果
@@ -990,44 +1186,123 @@
 	.editor-wrap :deep(.md-editor-preview) {
 		font-size: calc(20px + var(--font-shift, 0px));
 	}
-	.drawer-meta {
-		font-size: calc(20px + var(--font-shift, 0px));
-		margin-bottom: 12px;
-		word-break: break-all;
-	}
 	.drawer-form :deep(.el-form-item) {
-		margin-bottom: 14px;
+		margin-bottom: 16px;
 	}
-	.drawer-form :deep(.el-collapse) {
-		border: none;
+	.drawer-form :deep(.el-form-item__label) {
+		font-weight: 600;
+		margin-bottom: 4px;
 	}
-	/* 开关行内嵌分类选择（草稿右侧）：定宽 + 间距，窄抽屉自动换行 */
-	.switch-category {
-		width: 220px;
-		margin: 0 12px;
+	/* 发布日期只读胶囊（后端发布时盖戳） */
+	.published-ro {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		height: 36px;
+		padding: 0 14px;
+		border-radius: 8px;
+		background: var(--el-fill-color-light);
+		color: var(--el-text-color-regular);
+		font-size: calc(20px + var(--font-shift, 0px));
+	}
+	.published-ro .el-icon {
+		color: var(--el-color-primary);
+		font-size: calc(18px + var(--font-shift, 0px));
+	}
+	/* 分隔线：内容字段与下方开关区 */
+	.drawer-divider {
+		height: 1px;
+		background: var(--el-border-color-lighter);
+		margin: 4px 0 12px;
+	}
+	/* 开关行：左说明右开关 */
+	.switch-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 6px 2px 14px;
+	}
+	.switch-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		font-size: calc(20px + var(--font-shift, 0px));
+	}
+	.switch-label .el-icon {
+		color: var(--el-text-color-secondary);
+		font-size: calc(18px + var(--font-shift, 0px));
+	}
+	/* 加密卡片：单独处置，开启时暖色提示并展开密码区 */
+	.encrypt-card {
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 10px;
+		padding: 8px 14px 2px;
+		transition:
+			border-color 0.2s,
+			background-color 0.2s;
+	}
+	.encrypt-card.is-on {
+		border-color: rgb(230 162 60 / 55%);
+		background: rgb(230 162 60 / 6%);
+	}
+	.encrypt-card .switch-row {
+		padding: 6px 0 10px;
+	}
+	.encrypt-card .switch-row.sub {
+		padding: 2px 0 10px;
+	}
+	.encrypt-card .switch-row.sub .switch-label {
+		color: var(--el-text-color-secondary);
+	}
+	.encrypt-card .el-input {
+		margin-bottom: 12px;
+	}
+	/* 封面预览缩略图 */
+	.cover-preview {
+		margin-top: 8px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+	.cover-preview img {
+		display: block;
+		width: 100%;
+		max-height: 150px;
+		object-fit: cover;
 	}
 	.cover-upload {
 		cursor: pointer;
 	}
-	/* 访问路径：单选竖排 + 条件输入 + 地址预览 */
-	.link-mode {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 8px;
-		width: 100%;
+	/* 表单标签行：字段名 + 紧凑实心生成按钮（白字高对比，与字段名留出间距） */
+	.label-row {
+		display: inline-flex;
+		align-items: center;
+		gap: 12px;
 	}
-	.link-mode .el-radio-group {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 2px;
+	.ai-gen-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		height: 26px;
+		padding: 0 12px;
+		border: none;
+		border-radius: 6px;
+		background: var(--el-color-primary);
+		color: #fff;
+		font-size: calc(16px + var(--font-shift, 0px));
+		font-family: inherit;
+		line-height: 1;
+		cursor: pointer;
 	}
-	.link-mode .el-input {
-		width: 100%;
+	.ai-gen-btn .el-icon {
+		font-size: calc(14px + var(--font-shift, 0px));
 	}
-	.link-preview {
-		font-size: calc(20px + var(--font-shift, 0px));
+	.ai-gen-btn:hover:not(:disabled) {
+		background: var(--el-color-primary-light-3);
+	}
+	.ai-gen-btn:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
 	}
 	/* 下拉候选项右侧的使用次数 */
 	.opt-count {
@@ -1139,6 +1414,16 @@
 	}
 	.apply-wrap {
 		margin-left: 12px;
+	}
+	/* 续改输入行：diff 下方、按钮区上方 */
+	.ai-followup {
+		display: flex;
+		gap: 8px;
+		align-items: flex-start;
+		margin-top: 10px;
+	}
+	.ai-followup .el-input {
+		flex: 1;
 	}
 	/* IDEA 式左右 diff：行号槽 + 行级红绿底 + +/− 行标记；行内再叠加字符级片段 */
 	.diff-wrap {
