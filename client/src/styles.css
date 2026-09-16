@@ -480,6 +480,19 @@ body::after {
 	border-radius: 999px;
 }
 
+/* 多选下拉的已选标签：EP 默认灰底（--el-fill-color）观感像置灰，改为品牌淡靛底 */
+.el-select__selection .el-tag {
+	background-color: rgba(99, 102, 241, 0.12);
+	color: #4f46e5;
+}
+.el-select__selection .el-tag .el-tag__close {
+	color: #4f46e5;
+}
+.el-select__selection .el-tag .el-tag__close:hover {
+	background-color: #4f46e5;
+	color: #fff;
+}
+
 /* 表格：全透明让卡片玻璃透出来 */
 .el-table {
 	background: transparent;
