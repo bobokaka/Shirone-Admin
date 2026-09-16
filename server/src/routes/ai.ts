@@ -14,6 +14,14 @@ import {
 } from "../services/aiSettings.js";
 import { generateCommitMessage } from "../services/commitMessage.js";
 import { searchMusicWithAi } from "../services/musicSearch.js";
+import {
+	appendMessage,
+	createSession,
+	effectiveMessages,
+	loadSession,
+	rollbackLastUser,
+	type AiSession,
+} from "../services/aiSession.js";
 import { draftTimeline } from "../services/timelineDraft.js";
 import { scrapeWallpapers } from "../services/wallpaperSearch.js";
 
@@ -36,30 +44,28 @@ function editMessages(instruction: string, text: string): AiChatMessage[] {
 	];
 }
 
-/** chat-stream 的请求体：完整多轮对话（user/assistant 交替），system 独立传 */
+/** 会话式流式端点共用的 system：改写与问答双模式（任务续聊、自由追问同一会话） */
+const SESSION_SYSTEM =
+	"你是博客管理工具内置的 AI 助手，擅长 Markdown 写作、中文表达润色与博客内容管理问答。依据对话历史处理用户请求：用户下达改写/润色类指令时只输出改写结果本身（要求输出全文时给完整正文），不要任何解释、前后缀或代码围栏；用户提问讨论时回答简洁准确，默认使用中文，涉及改写建议时给出可直接使用的文本。";
+
+/** chat-stream 的请求体：会话续话——sessionId 续已有会话，缺省新建；上下文由服务端持有 */
 const chatStreamSchema = z.object({
-	messages: z
-		.array(
-			z.object({
-				role: z.enum(["user", "assistant"]),
-				content: z.string().min(1).max(100_000),
-			}),
-		)
-		.min(1)
-		.max(40),
+	sessionId: z.string().uuid().optional(),
+	message: z.string().min(1).max(100_000),
 	system: z.string().max(10_000).optional(),
 	maxTokens: z.number().int().min(16).max(16_384).optional(),
 });
 
 /**
- * SSE 转发核心（edit-stream / chat-stream 共用）：
- * 自定义帧格式（每帧一行 data JSON）：thinking / text 增量 → done（含全文）或 error。
+ * SSE 转发核心（edit-stream / chat-stream 共用，会话式）：
+ * 自定义帧格式（每帧一行 data JSON）：thinking / text 增量 → done（含全文与 sessionId）或 error。
  * 客户端断开（用户点停止/关页面）即中止上游；超时按「无输出闲置」计，不限制总时长。
+ * 本轮成功：结果写回会话后再发 done；停止/超时/失败：回滚本轮 user 消息，会话停留在上一个完整轮次。
  */
 async function pipeSseStream(
 	reply: FastifyReply,
 	settings: Awaited<ReturnType<typeof loadAiSettings>>,
-	messages: AiChatMessage[],
+	session: AiSession,
 	maxTokens: number,
 ): Promise<void> {
 	reply.hijack();
@@ -96,7 +102,7 @@ async function pipeSseStream(
 		armIdle();
 		const result = await streamAiChat(
 			settings,
-			{ messages, maxTokens },
+			{ messages: effectiveMessages(session), maxTokens },
 			{
 				onDelta: (kind, text) => {
 					armIdle();
@@ -105,8 +111,18 @@ async function pipeSseStream(
 			},
 			upstream.signal,
 		);
-		send({ type: "done", content: result.content, model: result.model, completionTokens: result.completionTokens });
+		// 先落会话再报 done：客户端拿到 sessionId 即可立刻续轮，assistant 必已就位
+		await appendMessage(session.id, { role: "assistant", content: result.content });
+		send({
+			type: "done",
+			content: result.content,
+			model: result.model,
+			completionTokens: result.completionTokens,
+			sessionId: session.id,
+		});
 	} catch (e) {
+		// 本轮无完整产出：回滚 user 消息，保证会话仍是严格交替的完整轮次
+		await rollbackLastUser(session.id);
 		if ((e as Error).name === "AbortError" && abortReason !== "timeout") {
 			// 用户主动停止/页面关闭：连接已断，静默收尾
 		} else {
@@ -232,6 +248,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
 	/**
 	 * 流式改写（SSE）：思考/正文增量实时下发，写作任务可看到模型在干什么、随时停止。
+	 * 首轮即新会话：全文只此一传，后续追问走 chat-stream 续会话（只传 sessionId + 指令）。
 	 */
 	app.post("/api/ai/edit-stream", async (req, reply) => {
 		const body = editSchema.parse(req.body);
@@ -239,11 +256,18 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 		if (!settings.enable) {
 			throw new ApiError(400, "AI 助手未启用：请先在「设置 → AI 助手」开启并保存");
 		}
-		await pipeSseStream(reply, settings, editMessages(body.instruction, body.text), body.maxTokens ?? 4096);
+		const session = await createSession(SESSION_SYSTEM);
+		await appendMessage(session.id, {
+			role: "user",
+			content: `指令：${body.instruction}\n\n文本：\n${body.text}`,
+		});
+		await pipeSseStream(reply, settings, session, body.maxTokens ?? 4096);
 	});
 
 	/**
-	 * 流式多轮对话（SSE）：控制台追问/自由聊天入口，帧格式与 edit-stream 一致。
+	 * 流式多轮对话（SSE）：控制台追问/续改共用，帧格式与 edit-stream 一致。
+	 * sessionId 续已有会话（服务端读会话文件组装上下文，客户端不重传历史）；
+	 * 会话不存在（已被淘汰/清理）则用提交的 system 新建，done 帧回传实际 sessionId。
 	 */
 	app.post("/api/ai/chat-stream", async (req, reply) => {
 		const body = chatStreamSchema.parse(req.body);
@@ -251,11 +275,9 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 		if (!settings.enable) {
 			throw new ApiError(400, "AI 助手未启用：请先在「设置 → AI 助手」开启并保存");
 		}
-		const messages: AiChatMessage[] = [
-			...(body.system ? [{ role: "system" as const, content: body.system }] : []),
-			...body.messages,
-		];
-		await pipeSseStream(reply, settings, messages, body.maxTokens ?? 8192);
+		const session = (body.sessionId ? await loadSession(body.sessionId) : null) ?? (await createSession(body.system ?? ""));
+		await appendMessage(session.id, { role: "user", content: body.message });
+		await pipeSseStream(reply, settings, session, body.maxTokens ?? 8192);
 	});
 
 	/** 音乐版权检索（联网优先，不支持的服务自动降级并标记 searchUsed=false） */
