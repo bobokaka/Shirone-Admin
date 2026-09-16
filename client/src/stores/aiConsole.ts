@@ -4,11 +4,10 @@ import { ElMessage } from "element-plus";
 import { streamChat, streamEdit, type StreamEditInput, type StreamEditResult } from "../api/stream";
 
 /**
- * AI 流式控制台：全局唯一，兼具三种形态——
+ * AI 流式控制台：全局唯一，兼具两种形态——
  * 任务（run）：编辑器/说说等写作入口，开场即清空旧对话，完成把全文返回调用方；
- * 对话（send）：任务结束后或随时打开，多轮追问/自由聊天；
- * 续改（revise）：拿任务结果继续下指令，AI 基于上一轮结果再改一版全文。
- * 上下文由服务端会话持有：run 首轮把全文传一次，之后 send/revise 只传 sessionId + 新指令。
+ * 对话（send）：任务结束后或随时打开，多轮追问/自由聊天。
+ * 上下文由服务端会话持有：run 首轮把全文传一次，之后 send 只传 sessionId + 新指令。
  */
 
 /** 单条思考流滚动保留上限：超出掐头续尾，防长思考撑爆 DOM */
@@ -217,32 +216,6 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		);
 	}
 
-	/**
-	 * 续改入口：对当前会话上一轮的结果继续下指令，AI 输出修改后的完整正文。
-	 * 返回全文供调用方替换展示（diff 右列等）；无会话/停止/失败返回 null。
-	 */
-	async function revise(text: string, opts?: { onText?: (full: string) => void }): Promise<string | null> {
-		const instruction = text.trim();
-		if (instruction === "") return null;
-		if (running.value) {
-			ElMessage.warning("已有 AI 任务进行中，请先停止或等待完成");
-			return null;
-		}
-		if (!sessionId.value) {
-			ElMessage.warning("会话已失效，请重新发起 AI 任务");
-			return null;
-		}
-		const message = `继续修改：${instruction}\n\n请在上一轮结果的基础上按上述要求修改，输出修改后的完整正文，不要任何解释、前后缀或代码围栏。`;
-		const entry = beginTurn(instruction, message);
-		return runTurn(
-			entry,
-			(handlers, signal) =>
-				streamChat({ sessionId: sessionId.value ?? undefined, message, maxTokens: 16384 }, handlers, signal),
-			opts?.onText,
-			false,
-		);
-	}
-
 	function stop(): void {
 		controller?.abort();
 	}
@@ -287,7 +260,6 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		statusLabel,
 		run,
 		send,
-		revise,
 		stop,
 		newTalk,
 		close,

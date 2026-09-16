@@ -143,6 +143,33 @@
 	const aiOn = computed(() => aiSettings.value?.enable === true);
 	const aiMenuVisible = ref(false);
 	const aiCustomInstruction = ref("");
+	/* 下拉是纯悬停型（mouseleave 即收起）：输入自定义指令期间挂起悬停收起，
+	   改为焦点离开菜单才收起，否则打字时手一移开菜单就没了 */
+	const aiMenuEl = ref<HTMLElement>();
+	const aiInstructionFocused = ref(false);
+	let aiMenuBlurTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function onAiMenuChange(v: boolean): void {
+		if (!v && aiInstructionFocused.value) return;
+		aiMenuVisible.value = v;
+	}
+
+	function onAiInstructionFocus(): void {
+		aiInstructionFocused.value = true;
+		if (aiMenuBlurTimer) {
+			clearTimeout(aiMenuBlurTimer);
+			aiMenuBlurTimer = null;
+		}
+	}
+
+	function onAiInstructionBlur(): void {
+		aiInstructionFocused.value = false;
+		// 延迟收起：给「AI执行」按钮留出接收焦点的时间，焦点仍在菜单内则不收
+		if (aiMenuBlurTimer) clearTimeout(aiMenuBlurTimer);
+		aiMenuBlurTimer = setTimeout(() => {
+			if (!aiMenuEl.value?.contains(document.activeElement)) aiMenuVisible.value = false;
+		}, 150);
+	}
 	/** 流式控制台全局共享：进度/停止都在面板里，这里只取 running 态禁用菜单 */
 	const aiConsole = useAiConsoleStore();
 	const aiRunning = computed(() => aiConsole.running);
@@ -240,7 +267,7 @@
 		return before > 0 && Math.abs(aiPreview.value.result.length - before) / before > 0.2;
 	});
 
-	type AiAction = "improve" | "format" | "polish" | "continue" | "summary" | "custom";
+	type AiAction = "improve" | "format" | "polish" | "continue" | "custom";
 
 	/** AI 菜单项：图标 + 「AI」前缀文案，一眼可辨 */
 	const AI_ACTIONS: Array<{ id: Exclude<AiAction, "custom">; icon: string; label: string }> = [
@@ -248,7 +275,6 @@
 		{ id: "format", icon: "material-symbols:format-align-left", label: "AI格式优化（全文）" },
 		{ id: "polish", icon: "material-symbols:brush", label: "AI润色（选中文本优先）" },
 		{ id: "continue", icon: "material-symbols:edit-note", label: "AI续写（追加文末）" },
-		{ id: "summary", icon: "material-symbols:summarize", label: "AI生成摘要（回填文章信息）" },
 	];
 
 	/** 服务端 /api/ai/edit 的单次文本上限（字符） */
@@ -305,67 +331,13 @@
 		aiPreview.value = null;
 	}
 
-	/** 续改输入：diff 弹窗内对 AI 结果继续下指令，右列流式刷新为最新版 */
-	const aiFollowup = ref("");
-
-	function onFollowupKey(e: KeyboardEvent): void {
-		// 中文输入法组词确认的 Enter 不触发发送
-		if (e.isComposing || e.shiftKey) return;
-		e.preventDefault();
-		void doFollowup();
-	}
-
-	async function doFollowup(): Promise<void> {
-		const text = aiFollowup.value.trim();
-		if (text === "" || aiPreview.value?.streaming) return;
-		aiFollowup.value = "";
-		await continuePreviewAction(text);
-	}
-
-	/**
-	 * 续改公共流程：基于服务端会话的上一轮结果继续修改，流式期间右列实时刷新，
-	 * 完成后 diff（仍对比首轮原文）替换为最新全文；停止保留半成品，失败回退上一版。
-	 */
-	async function continuePreviewAction(instruction: string): Promise<void> {
-		const prev = aiPreview.value;
-		if (!prev || prev.streaming) return;
-		const fallback = prev.result;
-		prev.streaming = true;
-		prev.stopped = false;
-		let live = "";
-		let flushTimer: ReturnType<typeof setTimeout> | null = null;
-		const result = await aiConsole.revise(instruction, {
-			onText: (full) => {
-				live = full;
-				if (!flushTimer) {
-					flushTimer = setTimeout(() => {
-						flushTimer = null;
-						if (aiPreview.value) aiPreview.value.result = live;
-					}, 200);
-				}
-			},
-		});
-		if (flushTimer) clearTimeout(flushTimer);
-		// 流式期间用户已放弃/关闭弹窗：不再恢复
-		if (aiPreview.value === null) return;
-		expandedFolds.value = new Set();
-		currentChange.value = 0;
-		if (result !== null) {
-			aiPreview.value = { ...prev, result, streaming: false, stopped: false };
-			jumpFirstChange();
-			return;
-		}
-		if (live.trim() !== "" && aiConsole.lastOutcome === "stopped") {
-			aiPreview.value = { ...prev, result: live, streaming: false, stopped: true };
-			return;
-		}
-		// 失败：错误已在控制台展示，弹窗回退上一版完整结果
-		aiPreview.value = { ...prev, result: fallback, streaming: false, stopped: false };
-	}
-
 	async function runAiAction(id: AiAction): Promise<void> {
 		if (aiRunning.value) return;
 		if (!checkAiBody()) return;
+		// 收起菜单并把焦点还给编辑器（自定义指令输入框可能仍持有焦点）
+		if (aiMenuEl.value?.contains(document.activeElement)) {
+			(document.activeElement as HTMLElement).blur();
+		}
 		aiMenuVisible.value = false;
 		const selected = (editorRef.value?.getSelectedText() ?? "").trim();
 		// 全走流式控制台：思考/正文实时上屏、可随时停止；null 即停止/失败，原文不动
@@ -417,12 +389,7 @@
 			return;
 		}
 
-		if (id === "summary") {
-			if (await aiGenerateSummary()) drawerVisible.value = true;
-			return;
-		}
-
-		// 自定义指令：有选中作用于选中，无选中作用于全文（预览后应用）
+		// 自定义指令：有选中作用于选中，无选中作用于全文（预览后应用）；执行成功后清空输入
 		const instruction = aiCustomInstruction.value.trim();
 		if (instruction === "") return;
 		if (selected !== "") {
@@ -431,9 +398,11 @@
 				const text = result;
 				editorRef.value?.insert(() => ({ targetValue: text, select: true }));
 				ElMessage.success("已替换选中内容");
+				aiCustomInstruction.value = "";
 			}
 		} else {
 			await runPreviewAction("自定义指令", instruction, 16384);
+			if (aiConsole.lastOutcome === "done") aiCustomInstruction.value = "";
 		}
 	}
 
@@ -832,7 +801,7 @@
 					<DropdownToolbar
 						:visible="aiMenuVisible"
 						title="AI 助手"
-						@on-change="(v: boolean) => (aiMenuVisible = v)"
+						@on-change="onAiMenuChange"
 					>
 						<template #trigger>
 							<span class="ai-toolbar-trigger" :class="{ 'is-busy': aiRunning }">
@@ -842,7 +811,7 @@
 							</span>
 						</template>
 						<template #overlay>
-							<div class="ai-toolbar-menu">
+							<div ref="aiMenuEl" class="ai-toolbar-menu">
 								<button
 									v-for="a in AI_ACTIONS"
 									:key="a.id"
@@ -857,7 +826,9 @@
 										v-model="aiCustomInstruction"
 										type="text"
 										placeholder="自定义指令…"
-										@keydown.enter.prevent="runAiAction('custom')"
+										@focus="onAiInstructionFocus"
+										@blur="onAiInstructionBlur"
+										@keydown.esc="aiMenuVisible = false"
 									/>
 									<button
 										type="button"
@@ -1106,26 +1077,6 @@
 						<span class="seg del">行内删除</span><span class="seg ins">行内新增</span>
 					</span>
 				</div>
-			</div>
-			<!-- 续改：带着服务端会话继续下指令，右列流式替换为最新版（diff 始终对比首轮原文） -->
-			<div class="ai-followup">
-				<el-input
-					v-model="aiFollowup"
-					type="textarea"
-					:rows="1"
-					:autosize="{ minRows: 1, maxRows: 4 }"
-					resize="none"
-					placeholder="继续对话修改，如「再精简一点」「第二段展开讲讲」…（Enter 发送，Shift+Enter 换行）"
-					:disabled="aiPreview?.streaming || !aiConsole.sessionId"
-					@keydown.enter="onFollowupKey"
-				/>
-				<el-button
-					type="primary"
-					:disabled="aiPreview?.streaming || !aiConsole.sessionId || aiFollowup.trim() === ''"
-					@click="doFollowup"
-				>
-					继续修改
-				</el-button>
 			</div>
 			<template #footer>
 				<el-button :disabled="aiPreview?.streaming || !aiPreview?.result" @click="copyAiResult">
@@ -1414,16 +1365,6 @@
 	}
 	.apply-wrap {
 		margin-left: 12px;
-	}
-	/* 续改输入行：diff 下方、按钮区上方 */
-	.ai-followup {
-		display: flex;
-		gap: 8px;
-		align-items: flex-start;
-		margin-top: 10px;
-	}
-	.ai-followup .el-input {
-		flex: 1;
 	}
 	/* IDEA 式左右 diff：行号槽 + 行级红绿底 + +/− 行标记；行内再叠加字符级片段 */
 	.diff-wrap {
