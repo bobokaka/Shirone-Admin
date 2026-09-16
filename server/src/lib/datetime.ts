@@ -33,6 +33,11 @@ export function shanghaiMomentStamp(d = new Date()): string {
 	return `${p.year}-${p.month}-${p.day} ${p.hour === "24" ? "00" : p.hour}:${p.minute}:${p.second}`;
 }
 
+/** Date → YYYY-MM-DDTHH:mm:ss+08:00（文章 publishedAt 格式：实际发布时刻戳） */
+export function shanghaiPostStamp(d = new Date()): string {
+	return shanghaiMomentStamp(d).replace(" ", "T") + "+08:00";
+}
+
 /** YYYY-MM-DD HH:mm:ss → yyyymmdd-HHmmss（说说文件标识） */
 export function momentId(published: string): string {
 	const digits = published.replace(/\D/g, "");

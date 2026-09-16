@@ -16,7 +16,7 @@ import type {
 import { ASSETS_DIR, MOMENT_IMAGES_DIR, MOMENTS_DIR, POSTS_DIR, PUBLIC_DIR } from "../config.js";
 import { ApiError } from "../lib/errors.js";
 import { removeNavbarPostLinks, syncNavbarPostLinks } from "../lib/navbar-sync.js";
-import { momentId, shanghaiMomentStamp, todayShanghai } from "../lib/datetime.js";
+import { momentId, shanghaiMomentStamp, shanghaiPostStamp, todayShanghai } from "../lib/datetime.js";
 import { parseFrontmatter, serializeFrontmatter } from "../lib/frontmatter.js";
 import { sanitizeUserSlug, suggestSlug } from "../lib/slug.js";
 
@@ -283,6 +283,12 @@ export async function savePost(input: SavePostInput): Promise<PostFile> {
 		delete next.password;
 		delete next.passwordHint;
 		next.hideHomeContent = bool(next.hideHomeContent, true);
+	}
+	// 发布日期＝实际发布时刻：草稿 → 正式发布的这一次由后端盖当前时间戳（单篇与批量共用此路径），前端只读
+	if (bool(existing.data.draft, false) && next.draft === false) {
+		const stamp = shanghaiPostStamp();
+		next.published = stamp.slice(0, 10);
+		next.publishedAt = stamp;
 	}
 
 	await fs.mkdir(path.dirname(abs), { recursive: true });
