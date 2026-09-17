@@ -188,7 +188,11 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		// 任务即新对话：不携带上一个任务的上下文
 		entries.value = [];
 		sessionId.value = null;
-		const entry = beginTurn(runTitle, `指令：${input.instruction}\n\n文本：\n${input.text}`, opts?.silent);
+		const detail =
+			input.postPath !== undefined
+				? `指令：${input.instruction}\n（目标文章 ${input.postPath}；正文由服务端按需读取）`
+				: `指令：${input.instruction}\n\n文本：\n${input.text ?? ""}`;
+		const entry = beginTurn(runTitle, detail, opts?.silent);
 		return runTurn(
 			entry,
 			(handlers, signal) => streamEdit(input, handlers, signal),

@@ -2,7 +2,13 @@ import { ApiError } from "./client";
 
 export interface StreamEditInput {
 	instruction: string;
-	text: string;
+	/** 文章任务：目标文章（相对内容仓 content/posts）；正文由服务端 AI 用工具按需读取，客户端不上送 */
+	postPath?: string;
+	/** 编辑器选区（正文字符偏移），仅文章任务有效 */
+	selectionStart?: number;
+	selectionEnd?: number;
+	/** 小文本任务（说说、表单字段等，无文件可读）：直接上送待处理文本 */
+	text?: string;
 	maxTokens?: number;
 }
 

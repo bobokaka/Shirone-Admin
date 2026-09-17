@@ -3,16 +3,17 @@
 	import { useRouter } from "vue-router";
 	import { ElMessage, ElMessageBox } from "element-plus";
 	import { Icon } from "@iconify/vue";
-	import { DropdownToolbar, MdEditor, type ExposeParam, type ToolbarNames } from "md-editor-v3";
+	import { DropdownToolbar, MdEditor, NormalToolbar, type ExposeParam, type ToolbarNames } from "md-editor-v3";
 	import type { AiSettings, PostFile, PostMeta } from "@shirone-admin/shared";
 	import { aiApi, mediaApi, postApi } from "../api";
+	import { useTheme } from "../composables/useTheme";
 	import { useAiConsoleStore } from "../stores/aiConsole";
 	import { localMediaSanitize, previewUrlOf } from "../utils/content-media";
 	import { sideBySideDiff, type DiffRow } from "../utils/diff";
 
 	/**
 	 * 文章编辑器面板：完整编辑页与文章管理页「就地编辑」共用同一套界面与保存逻辑。
-	 * 差异仅两个开关：split 是否显示编辑器自带分栏预览；expandable 右上角是否提供「分栏编辑」跳转。
+	 * 差异仅两个开关：split 是否显示编辑器自带分栏预览；expandable 编辑器工具栏最右是否提供「分栏编辑」跳转。
 	 */
 	const props = withDefaults(
 		defineProps<{
@@ -20,7 +21,7 @@
 			path: string;
 			/** 显示编辑器自带分栏预览（完整编辑页 true / 就地编辑 false） */
 			split?: boolean;
-			/** 右上角显示「分栏编辑」跳转按钮 */
+			/** 编辑器工具栏最右显示「分栏编辑」跳转按钮 */
 			expandable?: boolean;
 			/** 返回按钮文案 */
 			backText?: string;
@@ -29,6 +30,7 @@
 	);
 	const emit = defineEmits<{ back: []; saved: [result: PostFile]; removed: [path: string] }>();
 	const router = useRouter();
+	const { isDark } = useTheme();
 
 	const post = ref<PostFile | null>(null);
 	const loading = ref(true);
@@ -84,55 +86,34 @@
 	/** 同一时刻只挂载一个编辑器，id 区分就地编辑与完整页便于排查 */
 	const editorId = computed(() => (props.expandable ? "post-inline-editor" : "post-editor"));
 
-	/** 就地编辑不显示分栏预览，预览/目录两个切换按钮一并隐藏；AI 启用时末尾追加自定义工具槽（数字 0 索引 defToolbars） */
+	/** 就地编辑不显示分栏预览，预览/目录两个切换按钮一并隐藏；工具栏尾部挂自定义槽（数字 = defToolbars
+	 *  槽内第 N 个实际渲染的子组件）：AI 下拉（启用时索引 0）在先，分栏相关按钮（预览/目录、
+	 *  分栏编辑跳转）一律排在其右侧 */
 	const toolbars = computed<ToolbarNames[]>(() => {
-		const aiTail: ToolbarNames[] = aiOn.value ? ["-", 0] : [];
-		return props.split
-			? [
-					"bold",
-					"italic",
-					"strikeThrough",
-					"-",
-					"title",
-					"quote",
-					"unorderedList",
-					"orderedList",
-					"task",
-					"-",
-					"codeRow",
-					"code",
-					"link",
-					"image",
-					"table",
-					"-",
-					"revoke",
-					"next",
-					"-",
-					"preview",
-					"catalog",
-					...aiTail,
-				]
-			: [
-					"bold",
-					"italic",
-					"strikeThrough",
-					"-",
-					"title",
-					"quote",
-					"unorderedList",
-					"orderedList",
-					"task",
-					"-",
-					"codeRow",
-					"code",
-					"link",
-					"image",
-					"table",
-					"-",
-					"revoke",
-					"next",
-					...aiTail,
-				];
+		const base: ToolbarNames[] = [
+			"bold",
+			"italic",
+			"strikeThrough",
+			"-",
+			"title",
+			"quote",
+			"unorderedList",
+			"orderedList",
+			"task",
+			"-",
+			"codeRow",
+			"code",
+			"link",
+			"image",
+			"table",
+			"-",
+			"revoke",
+			"next",
+		];
+		if (aiOn.value) base.push("-", 0);
+		if (props.split) base.push("-", "preview", "catalog");
+		if (props.expandable) base.push("-", aiOn.value ? 1 : 0);
+		return base;
 	});
 
 	/* ---------- AI 辅助写作：工具栏下拉菜单 ---------- */
@@ -277,8 +258,32 @@
 		{ id: "continue", icon: "material-symbols:edit-note", label: "AI续写（追加文末）" },
 	];
 
-	/** 服务端 /api/ai/edit 的单次文本上限（字符） */
+	/** AI 处理正文的上限（字符，客户端预检；服务端从磁盘读同一文件） */
 	const AI_TEXT_LIMIT = 100_000;
+
+	/** 当前选区（正文字符偏移，升序）；无选区返回 null（CodeMirror 偏移与编辑器正文同坐标系） */
+	function selectionRange(): { start: number; end: number } | null {
+		const sel = editorRef.value?.getEditorView()?.state.selection.main;
+		if (!sel || sel.empty) return null;
+		return { start: Math.min(sel.from, sel.to), end: Math.max(sel.from, sel.to) };
+	}
+
+	/** 按偏移替换正文片段并选中新文本：AI 运行期间选区会丢失（落盘重置编辑器），不能等结果回来再取现场选区 */
+	function replaceRange(start: number, end: number, text: string): void {
+		const view = editorRef.value?.getEditorView();
+		if (view) {
+			const len = view.state.doc.length;
+			const s = Math.min(start, len);
+			const e = Math.min(end, len);
+			view.dispatch({
+				changes: { from: s, to: e, insert: text },
+				selection: { anchor: s, head: s + text.length },
+			});
+			return;
+		}
+		const len = body.value.length;
+		body.value = body.value.slice(0, Math.min(start, len)) + text + body.value.slice(Math.min(end, len));
+	}
 
 	/** AI 处理正文的统一前置检查：空文/超限提示；通过返回 true */
 	function checkAiBody(): boolean {
@@ -296,6 +301,7 @@
 	/**
 	 * 全文改写类公共流程：先开 diff 弹窗，AI 结果流式刷进右列（节流 200ms），
 	 * 完成后启用应用并跳到第一处变更；停止但已有产出时保留查看（不允许应用）。
+	 * 只传 postPath 不上送正文，服务端模型经工具自行读取（调用前已静默落盘）。
 	 */
 	async function runPreviewAction(title: string, instruction: string, maxTokens: number): Promise<void> {
 		const original = body.value;
@@ -304,7 +310,7 @@
 		aiPreview.value = { title, original, result: "", streaming: true, stopped: false };
 		let live = "";
 		let flushTimer: ReturnType<typeof setTimeout> | null = null;
-		const result = await aiConsole.run(`AI${title}`, { instruction, text: original, maxTokens }, {
+		const result = await aiConsole.run(`AI${title}`, { instruction, postPath: props.path, maxTokens }, {
 			onText: (full) => {
 				live = full;
 				if (!flushTimer) {
@@ -334,12 +340,16 @@
 	async function runAiAction(id: AiAction): Promise<void> {
 		if (aiRunning.value) return;
 		if (!checkAiBody()) return;
+		// 选区必须最先取：下面的静默落盘会重置编辑器导致选区丢失，选中类任务会退化成全文任务
+		const range = selectionRange();
+		const selected = (editorRef.value?.getSelectedText() ?? "").trim();
+		// 服务端从磁盘读文：先静默落盘，保证模型读到最新正文
+		if (!(await autoSaveIfDirty())) return;
 		// 收起菜单并把焦点还给编辑器（自定义指令输入框可能仍持有焦点）
 		if (aiMenuEl.value?.contains(document.activeElement)) {
 			(document.activeElement as HTMLElement).blur();
 		}
 		aiMenuVisible.value = false;
-		const selected = (editorRef.value?.getSelectedText() ?? "").trim();
 		// 全走流式控制台：思考/正文实时上屏、可随时停止；null 即停止/失败，原文不动
 		let result: string | null = null;
 
@@ -353,16 +363,17 @@
 		}
 
 		if (id === "polish") {
-			if (selected !== "") {
+			if (selected !== "" && range) {
 				result = await aiConsole.run("AI润色（选中）", {
 					instruction:
-						"润色以下文字：表达更流畅自然、生动易读，抽象表述改为通俗说法并精确点明核心意义，保留原意与技术准确性，只输出润色结果。",
-					text: selected,
+						"润色用户选中的文字片段（用 read_selection 读取）：表达更流畅自然、生动易读，抽象表述改为通俗说法并精确点明核心意义，保留原意与技术准确性，只输出润色结果。",
+					postPath: props.path,
+					selectionStart: range.start,
+					selectionEnd: range.end,
 					maxTokens: 8192,
 				});
 				if (result !== null) {
-					const text = result;
-					editorRef.value?.insert(() => ({ targetValue: text, select: true }));
+					replaceRange(range.start, range.end, result);
 					ElMessage.success("已替换选中内容");
 				}
 			} else {
@@ -378,8 +389,8 @@
 		if (id === "continue") {
 			result = await aiConsole.run("AI续写", {
 				instruction:
-					"续写这篇文章：从当前结尾自然延续，保持语气、人称与 Markdown 格式一致，延续正文的标题编号体系（1、1.1、1.1.1 式）与生动易读的风格（短段、列表、关键处加粗，忌大段堆砌文字），只输出续写的新内容，不要重复已有内容。",
-				text: body.value,
+					"续写这篇目标文章：先读原文（结尾部分必读），从当前结尾自然延续，保持语气、人称与 Markdown 格式一致，延续正文的标题编号体系（1、1.1、1.1.1 式）与生动易读的风格（短段、列表、关键处加粗，忌大段堆砌文字），只输出续写的新内容，不要重复已有内容。",
+				postPath: props.path,
 				maxTokens: 8192,
 			});
 			if (result !== null) {
@@ -392,11 +403,16 @@
 		// 自定义指令：有选中作用于选中，无选中作用于全文（预览后应用）；执行成功后清空输入
 		const instruction = aiCustomInstruction.value.trim();
 		if (instruction === "") return;
-		if (selected !== "") {
-			result = await aiConsole.run("AI自定义指令（选中）", { instruction, text: selected, maxTokens: 8192 });
+		if (selected !== "" && range) {
+			result = await aiConsole.run("AI自定义指令（选中）", {
+				instruction: `${instruction}（作用于用户选中的文字片段，用 read_selection 读取原文，只输出处理结果）`,
+				postPath: props.path,
+				selectionStart: range.start,
+				selectionEnd: range.end,
+				maxTokens: 8192,
+			});
 			if (result !== null) {
-				const text = result;
-				editorRef.value?.insert(() => ({ targetValue: text, select: true }));
+				replaceRange(range.start, range.end, result);
 				ElMessage.success("已替换选中内容");
 				aiCustomInstruction.value = "";
 			}
@@ -435,14 +451,16 @@
 	/** AI 生成摘要回填文章信息（编辑器工具栏与信息抽屉共用）；静默执行不弹 AI 面板，返回是否成功回填 */
 	async function aiGenerateSummary(): Promise<boolean> {
 		if (!checkAiBody()) return false;
+		// 服务端从磁盘读文：先静默落盘
+		if (!(await autoSaveIfDirty())) return false;
 		drawerAiBusy.value = "summary";
 		try {
 			const result = await aiConsole.run(
 				"AI生成摘要",
 				{
 					instruction:
-						"为这篇文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
-					text: body.value,
+						"为这篇目标文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
+					postPath: props.path,
 					maxTokens: 1024,
 				},
 				{ silent: true },
@@ -473,6 +491,8 @@
 	/** AI 生成标签回填文章信息：静默执行不弹 AI 面板；先匹配全站现有标签，不足以概括时才新增；已有标签需确认覆盖 */
 	async function aiGenerateTags(): Promise<void> {
 		if (!checkAiBody()) return;
+		// 服务端从磁盘读文：先静默落盘
+		if (!(await autoSaveIfDirty())) return;
 		const pool = tagOptions.value.map((t) => t.name);
 		const poolNote =
 			pool.length > 0
@@ -483,8 +503,8 @@
 			const result = await aiConsole.run(
 				"AI生成标签",
 				{
-					instruction: `为这篇 Markdown 文章生成 3-6 个标签。${poolNote}中文为主，通用技术名词可用英文（如 TypeScript）。只输出标签本身，用逗号分隔，不要编号、引号或解释。`,
-					text: body.value,
+					instruction: `为这篇目标文章（原文自行读取）生成 3-6 个标签。${poolNote}中文为主，通用技术名词可用英文（如 TypeScript）。只输出标签本身，用逗号分隔，不要编号、引号或解释。`,
+					postPath: props.path,
 					maxTokens: 512,
 				},
 				{ silent: true },
@@ -610,6 +630,7 @@
 		try {
 			const filled = post.value;
 			const bodyBefore = body.value;
+			const titleBefore = title.value;
 			const result = await postApi.save({
 				path: props.path,
 				body: body.value,
@@ -631,13 +652,24 @@
 					updatedAt: filled.meta.updatedAt ?? "",
 				},
 			});
-			fill(result);
-			// 服务端序列化会 trim 正文并保证单个文末换行：首尾空白差异时保留编辑器原文，
-			// 避免 10s 自动保存重置内容把输入中的光标顶掉；基线同步为编辑器值以免假“脏”
-			if (bodyBefore !== result.body && bodyBefore.trim() === result.body.trim()) {
-				body.value = bodyBefore;
-				post.value = { ...result, body: bodyBefore };
+			// —— 保存回填的输入保护：自动保存对打字中的用户必须无感 ——
+			// 对编辑器 v-model 赋不同的值＝整篇替换文档，光标会跳回开头（旧做法先 fill 再改回，
+			// 编辑器已被重置两次，光标照样丢）。因此正文/标题/信息抽屉字段一律不回写，只同步基线与只读元信息：
+			// - 请求期间用户继续输入 → 基线记磁盘版本，isDirty 保持为真，下一轮自动保存补落盘；
+			// - 服务端序列化只 trim 正文首尾空白 → 基线取编辑器现值，避免下一轮假“脏”反复保存。
+			const bodyTyped = body.value !== bodyBefore;
+			const titleTyped = title.value !== titleBefore;
+			if (!bodyTyped && bodyBefore.trim() !== result.body.trim()) {
+				// 防御：服务端实质改动了正文（当前实现只会 trim，理论不可达）才以磁盘版本为准
+				body.value = result.body;
 			}
+			post.value = {
+				...result,
+				body: bodyTyped ? result.body : body.value,
+				meta: { ...result.meta, title: titleTyped ? result.meta.title : title.value },
+			};
+			slug.value = result.meta.slug;
+			publishedAt.value = mergePublished(result.meta.published, result.meta.publishedAt);
 			password.value = "";
 			emit("saved", result);
 			if (!silent) ElMessage.success("已保存");
@@ -766,19 +798,15 @@
 				<el-icon><ArrowLeft /></el-icon>{{ backText }}
 			</el-button>
 			<el-input v-model="title" class="title-input" placeholder="文章标题" />
-			<el-button @click="drawerVisible = true">
-				<el-icon><InfoFilled /></el-icon>文章信息
-			</el-button>
-			<el-button type="danger" plain @click="remove">删除</el-button>
-			<el-button type="primary" :loading="saving" @click="save()">保存</el-button>
-			<el-button type="success" :loading="saving" @click="saveAndPublish">发布</el-button>
-			<span v-if="lastAutoSavedAt" class="auto-save-hint">已自动保存 {{ lastAutoSavedAt }}</span>
-			<!-- 分栏编辑图标：竖向分隔 + 左右两栏（本地 material-symbols 集合，无网络请求） -->
-			<el-tooltip v-if="expandable" content="分栏编辑（左右分栏预览）" placement="bottom">
-				<el-button circle aria-label="分栏编辑" @click="expand">
-					<el-icon><Icon icon="material-symbols:vertical-split" /></el-icon>
+			<el-button-group>
+				<el-button @click="drawerVisible = true">
+					<el-icon><InfoFilled /></el-icon>文章信息
 				</el-button>
-			</el-tooltip>
+				<el-button type="danger" @click="remove">删除</el-button>
+				<el-button type="primary" :loading="saving" @click="save()">保存</el-button>
+				<el-button type="success" :loading="saving" @click="saveAndPublish">发布</el-button>
+			</el-button-group>
+			<span v-if="lastAutoSavedAt" class="auto-save-hint">已自动保存 {{ lastAutoSavedAt }}</span>
 		</div>
 
 		<div class="editor-wrap">
@@ -792,13 +820,16 @@
 				:toolbars="toolbars"
 				:footers="[]"
 				:preview="split"
+				:theme="isDark ? 'dark' : 'light'"
 				:sanitize="editorSanitize"
 				placeholder="正文使用标准 Markdown 语法"
 				@on-upload-img="onUploadImg"
 			>
-				<!-- AI 下拉工具：数字槽位 0；overlay 渲染在编辑器 DOM 内，只放原生元素避免弹层冲突 -->
-				<template v-if="aiOn" #defToolbars>
+				<!-- 自定义工具：overlay 渲染在编辑器 DOM 内，只放原生元素避免弹层冲突。
+				    数字槽位 = 本模板内第 N 个实际渲染的子组件：AI 下拉（启用时），分栏编辑排最右 -->
+				<template #defToolbars>
 					<DropdownToolbar
+						v-if="aiOn"
 						:visible="aiMenuVisible"
 						title="AI 助手"
 						@on-change="onAiMenuChange"
@@ -841,6 +872,10 @@
 							</div>
 						</template>
 					</DropdownToolbar>
+					<!-- 分栏编辑：跳转完整编辑页（左右分栏预览），工具栏最右 -->
+					<NormalToolbar v-if="expandable" title="分栏编辑（左右分栏预览）" @onClick="expand">
+						<Icon icon="material-symbols:vertical-split" class="split-toolbar-icon" />
+					</NormalToolbar>
 				</template>
 			</MdEditor>
 		</div>
@@ -1126,11 +1161,10 @@
 		min-height: 0;
 	}
 	.editor-wrap :deep(.md-editor) {
-		--md-bk-color: #fff;
+		--md-bk-color: var(--el-bg-color);
 		height: 100%;
-		border-radius: 14px;
-		border: 1px solid var(--glass-border-soft);
-		box-shadow: var(--glass-shadow);
+		border-radius: 8px;
+		border: 1px solid var(--el-border-color-lighter);
 	}
 	/* 正文 ≥ 20px：编辑器源码区（CodeMirror 正文）与预览区文字同步抬高 */
 	.editor-wrap :deep(.cm-content),
@@ -1260,6 +1294,10 @@
 		float: right;
 		color: var(--el-text-color-secondary);
 		font-size: calc(16px + var(--font-shift, 0px));
+	}
+	/* 分栏编辑工具按钮：图标尺寸与内置工具位对齐 */
+	.split-toolbar-icon {
+		font-size: 20px;
 	}
 	/* AI 工具栏触发器：图标 + 「AI」文字（区别于纯图标工具，一眼可辨） */
 	.ai-toolbar-trigger {
@@ -1495,11 +1533,11 @@
 	.seg.del {
 		color: var(--el-color-danger);
 		text-decoration: line-through;
-		background: #fdf3c8;
+		background: var(--el-color-danger-light-9);
 		border-radius: 2px;
 	}
 	.seg.ins {
-		background: #cdeec9;
+		background: var(--el-color-success-light-9);
 		border-radius: 2px;
 	}
 	/* 底部图例 */

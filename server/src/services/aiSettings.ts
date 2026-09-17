@@ -169,8 +169,28 @@ function anthropicEndpoint(baseUrl: string): string {
 	return `${root}/v1/messages`;
 }
 
+/** 工具定义（协议无关）：parameters 为 JSON Schema */
+export interface AiToolDef {
+	name: string;
+	description: string;
+	parameters: Record<string, unknown>;
+}
+
+/** 模型发起的一次工具调用（anthropic tool_use / openai tool_calls 归一） */
+export interface AiToolCall {
+	id: string;
+	name: string;
+	args: Record<string, unknown>;
+}
+
+/** 代理循环消息：普通消息之外，支持带工具调用的 assistant 与回传结果的 tool 角色（双协议映射见 buildChatRequest） */
+export type AgentChatMessage =
+	| AiChatMessage
+	| { role: "assistant"; content: string; toolCalls: AiToolCall[] }
+	| { role: "tool"; toolCallId: string; content: string };
+
 interface ChatOptions {
-	messages: AiChatMessage[];
+	messages: AgentChatMessage[];
 	maxTokens?: number;
 	temperature?: number;
 	/** 覆盖设置里的超时（秒）；测试连接用短超时 */
@@ -183,6 +203,8 @@ interface ChatOptions {
 	noThink?: boolean;
 	/** 流式请求（SSE）；写作任务用，配合 streamAiChat */
 	stream?: boolean;
+	/** 声明工具（代理循环）：模型可调用，由调用方执行后经 tool 消息回传 */
+	tools?: AiToolDef[];
 }
 
 /** bigmodel 风格联网检索工具声明；不支持的服务会 4xx，由 callAiChat 降级重试 */
@@ -256,8 +278,70 @@ interface ChatRequest {
 	body: Record<string, unknown>;
 }
 
-/** 构造双协议请求（callAiChat 与 streamAiChat 共用）；tools=false 时不带联网检索声明 */
-function buildChatRequest(settings: AiSettings, options: ChatOptions, tools: boolean): ChatRequest {
+/** 协议无关消息 → anthropic 形态：system 提为顶层；assistant 工具调用转 tool_use 块；连续 tool 结果合并为单条 user（保持 user/assistant 交替） */
+function toAnthropicMessages(messages: AgentChatMessage[]): {
+	system: string;
+	messages: Array<{ role: "user" | "assistant"; content: unknown }>;
+} {
+	const system: string[] = [];
+	const out: Array<{ role: "user" | "assistant"; content: unknown }> = [];
+	for (const m of messages) {
+		if (m.role === "system") {
+			system.push(m.content);
+			continue;
+		}
+		if (m.role === "tool") {
+			const block = { type: "tool_result", tool_use_id: m.toolCallId, content: m.content };
+			const last = out.at(-1);
+			if (last?.role === "user" && Array.isArray(last.content)) last.content.push(block);
+			else out.push({ role: "user", content: [block] });
+			continue;
+		}
+		if (m.role === "assistant" && "toolCalls" in m && m.toolCalls.length > 0) {
+			out.push({
+				role: "assistant",
+				content: [
+					...(m.content !== "" ? [{ type: "text", text: m.content }] : []),
+					...m.toolCalls.map((tc) => ({ type: "tool_use", id: tc.id, name: tc.name, input: tc.args })),
+				],
+			});
+			continue;
+		}
+		out.push({ role: m.role === "assistant" ? "assistant" : "user", content: m.content });
+	}
+	return { system: system.join("\n\n"), messages: out };
+}
+
+/** 协议无关消息 → openai 形态：工具调用转 tool_calls，结果为 tool 角色 */
+function toOpenAiMessages(messages: AgentChatMessage[]): Array<Record<string, unknown>> {
+	return messages.map((m) => {
+		if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+		if (m.role === "assistant" && "toolCalls" in m && m.toolCalls.length > 0) {
+			return {
+				role: "assistant",
+				content: m.content === "" ? null : m.content,
+				tool_calls: m.toolCalls.map((tc) => ({
+					id: tc.id,
+					type: "function",
+					function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+				})),
+			};
+		}
+		return { role: m.role, content: m.content };
+	});
+}
+
+/** 双协议工具声明映射 */
+function toolsPayload(protocol: AiProtocol, tools: AiToolDef[]): unknown[] {
+	return tools.map((t) =>
+		protocol === "anthropic"
+			? { name: t.name, description: t.description, input_schema: t.parameters }
+			: { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } },
+	);
+}
+
+/** 构造双协议请求（callAiChat 与 streamAiChat 共用）；webSearch=true 带联网检索声明 */
+function buildChatRequest(settings: AiSettings, options: ChatOptions, webSearch: boolean): ChatRequest {
 	const provider = activeProvider(settings);
 	const protocol: AiProtocol = provider.protocol === "anthropic" ? "anthropic" : "openai";
 	const model = (options.model ?? provider.model).trim();
@@ -268,18 +352,17 @@ function buildChatRequest(settings: AiSettings, options: ChatOptions, tools: boo
 		temperature: options.temperature ?? provider.temperature,
 		stream: Boolean(options.stream),
 	};
-	if (tools) body.tools = webSearchTools();
+	if (webSearch) body.tools = webSearchTools();
+	else if (options.tools?.length) body.tools = toolsPayload(protocol, options.tools);
 	// 只对 anthropic 协议发 thinking disabled（官方与 GLM 等兼容端点均合法）；
 	// openai 协议无跨厂商安全参数，不发——思考型模型靠调大 maxTokens 兜底
 	if (options.noThink && protocol === "anthropic") body.thinking = { type: "disabled" };
 	if (protocol === "anthropic") {
-		// anthropic 协议不允许 system 出现在 messages 里，须提为顶层 system 字符串
-		const systemText = options.messages
-			.filter((m) => m.role === "system")
-			.map((m) => m.content)
-			.join("\n\n");
-		if (systemText !== "") body.system = systemText;
-		body.messages = options.messages.filter((m) => m.role !== "system");
+		// anthropic 协议不允许 system 出现在 messages 里，须提为顶层 system 字符串；
+		// 工具调用/结果在此完成消息形态转换
+		const mapped = toAnthropicMessages(options.messages);
+		if (mapped.system !== "") body.system = mapped.system;
+		body.messages = mapped.messages;
 		return {
 			url: anthropicEndpoint(provider.baseUrl),
 			headers: {
@@ -292,7 +375,7 @@ function buildChatRequest(settings: AiSettings, options: ChatOptions, tools: boo
 			body,
 		};
 	}
-	body.messages = options.messages;
+	body.messages = toOpenAiMessages(options.messages);
 	return {
 		url: chatEndpoint(provider.baseUrl),
 		headers: {
@@ -353,16 +436,17 @@ export interface StreamHandlers {
 }
 
 /**
- * 流式调用（写作任务）：SSE 解析上游思考/正文增量，逐段回调。
+ * 流式调用（写作任务）：SSE 解析上游思考/正文增量，逐段回调；解析双协议工具调用（代理循环用）。
  * 不关思考（这正是要展示给用户的内容）、不带联网检索工具；
  * 超时/客户端断开由调用方经 signal 传入，AbortError 原样抛出交上层定性。
+ * 返回的 toolCalls 非空表示模型请求调用工具：调用方执行后以 tool 消息回传继续下一轮。
  */
 export async function streamAiChat(
 	settings: AiSettings,
 	options: ChatOptions,
 	handlers: StreamHandlers,
 	signal?: AbortSignal,
-): Promise<AiChatResult> {
+): Promise<AiChatResult & { toolCalls: AiToolCall[] }> {
 	if (!aiReady(settings)) {
 		throw new ApiError(400, "AI 配置不完整：请先在「设置 → AI 助手」填写 API 地址、Key 与模型");
 	}
@@ -398,6 +482,27 @@ export async function streamAiChat(
 		handlers.onDelta(kind, text);
 	};
 
+	/** 流式中累积的工具调用（双协议）：input 参数以 JSON 增量抵达，凑齐再落定 */
+	const toolCalls: AiToolCall[] = [];
+	const pendingTools = new Map<number, { id: string; name: string; json: string }>();
+	const flushPendingTool = (index: number): void => {
+		const p = pendingTools.get(index);
+		if (!p || p.name === "") return;
+		pendingTools.delete(index);
+		let args: Record<string, unknown> = {};
+		if (p.json.trim() !== "") {
+			try {
+				const parsed = JSON.parse(p.json) as unknown;
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					args = parsed as Record<string, unknown>;
+				}
+			} catch {
+				// 参数残缺：按空参数执行，工具端有兜底说明
+			}
+		}
+		toolCalls.push({ id: p.id !== "" ? p.id : `call_${toolCalls.length + 1}`, name: p.name, args });
+	};
+
 	/** 单条上游 SSE 事件分发；返回 true 表示流应终止 */
 	const handleEvent = (payload: string): boolean => {
 		if (payload === "[DONE]") return true;
@@ -409,10 +514,23 @@ export async function streamAiChat(
 		}
 		if (protocol === "anthropic") {
 			const type = data.type as string | undefined;
-			if (type === "content_block_delta") {
-				const delta = data.delta as { type?: string; text?: string; thinking?: string } | undefined;
+			if (type === "content_block_start") {
+				const block = data.content_block as { type?: string; id?: string; name?: string } | undefined;
+				if (block?.type === "tool_use" && typeof block.name === "string") {
+					pendingTools.set(Number(data.index ?? 0), { id: block.id ?? "", name: block.name, json: "" });
+				}
+			} else if (type === "content_block_delta") {
+				const delta = data.delta as
+					| { type?: string; text?: string; thinking?: string; partial_json?: string }
+					| undefined;
 				if (delta?.type === "thinking_delta" && typeof delta.thinking === "string") emit("thinking", delta.thinking);
 				else if (delta?.type === "text_delta" && typeof delta.text === "string") emit("text", delta.text);
+				else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
+					const p = pendingTools.get(Number(data.index ?? 0));
+					if (p) p.json += delta.partial_json;
+				}
+			} else if (type === "content_block_stop") {
+				flushPendingTool(Number(data.index ?? 0));
 			} else if (type === "message_delta") {
 				const usage = data.usage as { output_tokens?: number } | undefined;
 				if (typeof usage?.output_tokens === "number") state.completionTokens = usage.output_tokens;
@@ -425,10 +543,35 @@ export async function streamAiChat(
 			return false;
 		}
 		// openai 兼容：GLM/DeepSeek 风格 reasoning_content 即思考
-		const choice = (data.choices as { delta?: { content?: string; reasoning_content?: string } }[] | undefined)?.[0];
+		const choice = (
+			data.choices as
+				| {
+						delta?: {
+							content?: string;
+							reasoning_content?: string;
+							tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
+						};
+						finish_reason?: string;
+				  }[]
+				| undefined
+		)?.[0];
 		if (choice?.delta) {
 			if (typeof choice.delta.reasoning_content === "string") emit("thinking", choice.delta.reasoning_content);
 			if (typeof choice.delta.content === "string") emit("text", choice.delta.content);
+			for (const tc of choice.delta.tool_calls ?? []) {
+				const idx = tc.index ?? 0;
+				let acc = pendingTools.get(idx);
+				if (!acc) {
+					acc = { id: "", name: "", json: "" };
+					pendingTools.set(idx, acc);
+				}
+				if (tc.id) acc.id = tc.id;
+				if (tc.function?.name) acc.name += tc.function.name;
+				if (tc.function?.arguments) acc.json += tc.function.arguments;
+			}
+		}
+		if (choice?.finish_reason === "tool_calls") {
+			for (const idx of [...pendingTools.keys()].sort((a, b) => a - b)) flushPendingTool(idx);
 		}
 		const usage = data.usage as { completion_tokens?: number } | undefined;
 		if (typeof usage?.completion_tokens === "number") state.completionTokens = usage.completion_tokens;
@@ -465,8 +608,10 @@ export async function streamAiChat(
 	} finally {
 		await reader.cancel().catch(() => {});
 	}
-	if (state.content === "") {
+	// openai 兼容端可能不带 finish_reason：兜底落定已识别的工具调用
+	for (const idx of [...pendingTools.keys()].sort((a, b) => a - b)) flushPendingTool(idx);
+	if (state.content === "" && toolCalls.length === 0) {
 		throw new ApiError(502, "AI 未返回任何正文（思考可能占满了 max_tokens，可重试或调大长度限制）");
 	}
-	return { content: state.content, model, completionTokens: state.completionTokens };
+	return { content: state.content, model, completionTokens: state.completionTokens, toolCalls };
 }

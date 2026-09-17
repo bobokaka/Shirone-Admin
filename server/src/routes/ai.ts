@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import type { AiChatMessage } from "@shirone-admin/shared";
+import type { AiChatResult } from "@shirone-admin/shared";
+import { readPostBody } from "../adapters/storage.js";
 import { ApiError } from "../lib/errors.js";
 import {
 	activeProvider,
@@ -11,9 +12,13 @@ import {
 	loadAiSettings,
 	saveAiSettings,
 	streamAiChat,
+	type AgentChatMessage,
+	type AiToolCall,
+	type AiToolDef,
 } from "../services/aiSettings.js";
 import { generateCommitMessage } from "../services/commitMessage.js";
 import { searchMusicWithAi } from "../services/musicSearch.js";
+import { executePostTool, postToolDefs } from "../services/aiPostTools.js";
 import {
 	appendMessage,
 	createSession,
@@ -25,28 +30,30 @@ import {
 import { draftTimeline } from "../services/timelineDraft.js";
 import { scrapeWallpapers } from "../services/wallpaperSearch.js";
 
-/** edit / edit-stream 共用的请求体 */
-const editSchema = z.object({
-	instruction: z.string().min(1).max(2_000),
-	text: z.string().max(100_000),
-	maxTokens: z.number().int().min(16).max(16_384).optional(),
-});
+/** edit-stream 的请求体：文章任务只传 postPath（正文由模型经工具自取）；text 保留给说说/表单等小文本任务 */
+const editStreamSchema = z
+	.object({
+		instruction: z.string().min(1).max(2_000),
+		/** 小文本任务（说说、表单字段）：直接内联，无文件可读 */
+		text: z.string().max(100_000).optional(),
+		/** 文章任务：目标文章（content/posts 相对路径） */
+		postPath: z.string().min(1).max(300).optional(),
+		/** 编辑器选区（正文字符偏移），仅文章任务有效 */
+		selectionStart: z.number().int().min(0).optional(),
+		selectionEnd: z.number().int().min(0).optional(),
+		maxTokens: z.number().int().min(16).max(16_384).optional(),
+	})
+	.refine((b) => (b.text ?? "") !== "" || b.postPath !== undefined, {
+		message: "需提供待处理文本或目标文章路径",
+	});
 
-/** edit / edit-stream 共用的消息组装 */
-function editMessages(instruction: string, text: string): AiChatMessage[] {
-	return [
-		{
-			role: "system",
-			content:
-				"你是 Markdown 技术博客的写作助手。依据指令改写用户给出的文本，只输出改写结果本身，不要任何解释、前后缀或代码围栏。",
-		},
-		{ role: "user", content: `指令：${instruction}\n\n文本：\n${text}` },
-	];
-}
+/** 文章优化会话的 system：模型经读取工具自取原文（大纲 → 区间 / 整篇 / 选区） */
+const EDIT_AGENT_SYSTEM =
+	"你是 Markdown 技术博客的写作助手，可调用工具按需读取目标文章的原文：长文先 get_outline 看结构，再 read_post 精读需要的区段或整篇；作用于选中内容的任务用 read_selection。动笔前必须读到相关原文，不要凭空编造。完成指令后只输出结果本身（要求输出全文时给完整正文），不要任何解释、前后缀或代码围栏。";
 
-/** 会话式流式端点共用的 system：改写与问答双模式（任务续聊、自由追问同一会话） */
-const SESSION_SYSTEM =
-	"你是博客管理工具内置的 AI 助手，擅长 Markdown 写作、中文表达润色与博客内容管理问答。依据对话历史处理用户请求：用户下达改写/润色类指令时只输出改写结果本身（要求输出全文时给完整正文），不要任何解释、前后缀或代码围栏；用户提问讨论时回答简洁准确，默认使用中文，涉及改写建议时给出可直接使用的文本。";
+/** 小文本任务（说说/表单字段）的 system：文本已内联在指令里 */
+const EDIT_INLINE_SYSTEM =
+	"你是 Markdown 技术博客的写作助手。依据指令改写用户给出的文本，只输出改写结果本身，不要任何解释、前后缀或代码围栏。";
 
 /** chat-stream 的请求体：会话续话——sessionId 续已有会话，缺省新建；上下文由服务端持有 */
 const chatStreamSchema = z.object({
@@ -56,10 +63,23 @@ const chatStreamSchema = z.object({
 	maxTokens: z.number().int().min(16).max(16_384).optional(),
 });
 
+/** 代理配置：声明给模型的工具与执行器（edit-stream 文章任务用） */
+interface StreamAgent {
+	tools: AiToolDef[];
+	execute(call: AiToolCall): Promise<string>;
+}
+
+/** 上游 4xx 且报错指向工具/函数能力缺失（httpError 文本含原始状态码与详情）：可降级重试 */
+function toolUnsupported(e: unknown): boolean {
+	return e instanceof ApiError && /AI 服务返回 4\d\d：.*(tool|function)/is.test(e.message);
+}
+
 /**
  * SSE 转发核心（edit-stream / chat-stream 共用，会话式）：
  * 自定义帧格式（每帧一行 data JSON）：thinking / text 增量 → done（含全文与 sessionId）或 error。
  * 客户端断开（用户点停止/关页面）即中止上游；超时按「无输出闲置」计，不限制总时长。
+ * 传入 agent 时走代理循环：模型请求读取工具 → 执行 → 结果回传继续生成，直到产出正文；
+ * 端点不支持工具调用则降级为服务端读全文内联一次直生成。
  * 本轮成功：结果写回会话后再发 done；停止/超时/失败：回滚本轮 user 消息，会话停留在上一个完整轮次。
  */
 async function pipeSseStream(
@@ -67,6 +87,7 @@ async function pipeSseStream(
 	settings: Awaited<ReturnType<typeof loadAiSettings>>,
 	session: AiSession,
 	maxTokens: number,
+	agent?: StreamAgent,
 ): Promise<void> {
 	reply.hijack();
 	const raw = reply.raw;
@@ -100,24 +121,65 @@ async function pipeSseStream(
 
 	try {
 		armIdle();
-		const result = await streamAiChat(
-			settings,
-			{ messages: effectiveMessages(session), maxTokens },
-			{
-				onDelta: (kind, text) => {
-					armIdle();
-					send({ type: kind, text });
+		/** 单轮流式：返回结果与本轮正文增量（模型偶尔在调用工具前输出说明文字，需带回上下文） */
+		const streamOnce = (messages: AgentChatMessage[], tools?: AiToolDef[]) => {
+			let text = "";
+			const promise = streamAiChat(
+				settings,
+				{ messages, maxTokens, ...(tools?.length ? { tools } : {}) },
+				{
+					onDelta: (kind, delta) => {
+						armIdle();
+						if (kind === "text") text += delta;
+						send({ type: kind, text: delta });
+					},
 				},
-			},
-			upstream.signal,
-		);
+				upstream.signal,
+			);
+			return promise.then((result) => ({ result, text }));
+		};
+
+		/** 代理循环：工具调用轮次执行读取（思考流透出进度），直到模型产出正文 */
+		const runLoop = async (initial: AgentChatMessage[], useAgent: boolean): Promise<AiChatResult> => {
+			const working = [...initial];
+			for (let round = 0; ; round++) {
+				const { result, text: roundText } = await streamOnce(working, useAgent ? agent?.tools : undefined);
+				if (result.toolCalls.length === 0 || !agent) return result;
+				if (round >= 12) throw new ApiError(502, "AI 连续调用工具未产出结果，请重试或换模型");
+				send({
+					type: "thinking",
+					text: `\n[调用 ${result.toolCalls.map((t) => t.name).join("、")} 读取文章]\n`,
+				});
+				working.push({ role: "assistant", content: roundText, toolCalls: result.toolCalls });
+				for (const call of result.toolCalls) {
+					const output = await agent.execute(call);
+					send({ type: "thinking", text: `（${call.name} 返回 ${output.length} 字符）\n` });
+					working.push({ role: "tool", toolCallId: call.id, content: output });
+				}
+			}
+		};
+
+		let final: AiChatResult;
+		try {
+			final = await runLoop(effectiveMessages(session), true);
+		} catch (e) {
+			if (!agent || !toolUnsupported(e)) throw e;
+			// 端点不支持工具调用：服务端自行读全文内联进指令，降级为一次直生成
+			const initial = effectiveMessages(session);
+			const fullText = await agent.execute({ id: "fallback", name: "read_post", args: {} });
+			const lastUser = initial.map((m) => m.role).lastIndexOf("user");
+			if (lastUser >= 0) {
+				initial[lastUser] = { role: "user", content: `${initial[lastUser].content}\n\n文本：\n${fullText}` };
+			}
+			final = await runLoop(initial, false);
+		}
 		// 先落会话再报 done：客户端拿到 sessionId 即可立刻续轮，assistant 必已就位
-		await appendMessage(session.id, { role: "assistant", content: result.content });
+		await appendMessage(session.id, { role: "assistant", content: final.content });
 		send({
 			type: "done",
-			content: result.content,
-			model: result.model,
-			completionTokens: result.completionTokens,
+			content: final.content,
+			model: final.model,
+			completionTokens: final.completionTokens,
 			sessionId: session.id,
 		});
 	} catch (e) {
@@ -236,32 +298,42 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 		});
 	});
 
-	/** 便捷封装：单条指令润色/改写选中文本（编辑器用） */
-	app.post("/api/ai/edit", async (req) => {
-		const body = editSchema.parse(req.body);
-		const settings = await loadAiSettings();
-		if (!settings.enable) {
-			throw new ApiError(400, "AI 助手未启用：请先在「设置 → AI 助手」开启并保存");
-		}
-		return callAiChat(settings, { messages: editMessages(body.instruction, body.text), maxTokens: body.maxTokens ?? 4096 });
-	});
-
 	/**
-	 * 流式改写（SSE）：思考/正文增量实时下发，写作任务可看到模型在干什么、随时停止。
-	 * 首轮即新会话：全文只此一传，后续追问走 chat-stream 续会话（只传 sessionId + 指令）。
+	 * 流式优化（SSE）：思考/正文增量实时下发，写作任务可看到模型在干什么、随时停止。
+	 * 文章任务（postPath）：客户端不上送正文，模型经读取工具（大纲/区间/选区）自行取原文，
+	 * 工具活动透出到思考流；端点不支持工具时自动降级为服务端读全文内联直生成。
+	 * 小文本任务（text）：直接内联（说说、表单字段等，无文件可读）。
+	 * 首轮即新会话：后续追问走 chat-stream 续会话（只传 sessionId + 指令）。
 	 */
 	app.post("/api/ai/edit-stream", async (req, reply) => {
-		const body = editSchema.parse(req.body);
+		const body = editStreamSchema.parse(req.body);
 		const settings = await loadAiSettings();
 		if (!settings.enable) {
 			throw new ApiError(400, "AI 助手未启用：请先在「设置 → AI 助手」开启并保存");
 		}
-		const session = await createSession(SESSION_SYSTEM);
-		await appendMessage(session.id, {
-			role: "user",
-			content: `指令：${body.instruction}\n\n文本：\n${body.text}`,
-		});
-		await pipeSseStream(reply, settings, session, body.maxTokens ?? 4096);
+		const postPath = body.postPath;
+		// 文章路径先验证（hijack 前以 JSON 报 404，而不是流中途报错）
+		if (postPath !== undefined) await readPostBody(postPath);
+		const selection =
+			postPath !== undefined && body.selectionStart !== undefined && body.selectionEnd !== undefined
+				? { start: body.selectionStart, end: body.selectionEnd }
+				: null;
+		const userContent =
+			postPath !== undefined
+				? `指令：${body.instruction}\n（目标文章：${postPath}${
+						selection ? "；用户选中了正文中一段文字，用 read_selection 读取" : ""
+					}；原文由你按需读取）`
+				: `指令：${body.instruction}\n\n文本：\n${body.text}`;
+		const session = await createSession(postPath !== undefined ? EDIT_AGENT_SYSTEM : EDIT_INLINE_SYSTEM);
+		await appendMessage(session.id, { role: "user", content: userContent });
+		const agent: StreamAgent | undefined =
+			postPath !== undefined
+				? {
+						tools: postToolDefs(selection),
+						execute: (call) => executePostTool(call, { postPath, selection }),
+					}
+				: undefined;
+		await pipeSseStream(reply, settings, session, body.maxTokens ?? 4096, agent);
 	});
 
 	/**

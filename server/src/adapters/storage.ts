@@ -247,6 +247,15 @@ const META_KEYS = [
 	"permalink",
 ] as const;
 
+/** AI 读取工具用：安全读取文章正文（路径校验同 savePost；frontmatter 剥离，与编辑器正文一致） */
+export async function readPostBody(rel: string): Promise<string> {
+	const abs = within(POSTS_DIR, rel);
+	const raw = await fs.readFile(abs, "utf8").catch(() => {
+		throw new ApiError(404, `文章不存在：${rel}`);
+	});
+	return parseFrontmatter(raw).body;
+}
+
 export async function savePost(input: SavePostInput): Promise<PostFile> {
 	const abs = within(POSTS_DIR, input.path);
 	const existingRaw = await fs.readFile(abs, "utf8").catch(() => {

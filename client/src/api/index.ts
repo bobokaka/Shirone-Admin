@@ -207,8 +207,6 @@ export const aiApi = {
 		maxTokens?: number,
 		opts?: { fast?: boolean },
 	) => api.post<AiChatResult>("/api/ai/chat", { messages, maxTokens, fast: opts?.fast }),
-	edit: (instruction: string, text: string, opts?: { maxTokens?: number }) =>
-		api.post<AiChatResult>("/api/ai/edit", { instruction, text, maxTokens: opts?.maxTokens }),
 	/** 音乐版权检索（联网优先）；searchUsed=false 表示服务不支持联网，结果可信度低 */
 	musicSearch: (query: string) =>
 		api.post<{ candidates: MusicSearchCandidate[]; searchUsed: boolean }>("/api/ai/music-search", { query }),
