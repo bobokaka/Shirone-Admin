@@ -826,7 +826,9 @@
 				@on-upload-img="onUploadImg"
 			>
 				<!-- 自定义工具：overlay 渲染在编辑器 DOM 内，只放原生元素避免弹层冲突。
-				    数字槽位 = 本模板内第 N 个实际渲染的子组件：AI 下拉（启用时），分栏编辑排最右 -->
+				    数字槽位按槽 children 数组下标取：AI 下拉 0（aiOn 时）、分栏编辑跳转 1（expandable 时）。
+				    槽内严禁插入 HTML 注释等额外节点——它们占下标，会让数字取到注释而按钮不渲染；
+				    NormalToolbar 的显示内容只认 #trigger 子插槽，放默认插槽会渲染成空按钮 -->
 				<template #defToolbars>
 					<DropdownToolbar
 						v-if="aiOn"
@@ -872,9 +874,10 @@
 							</div>
 						</template>
 					</DropdownToolbar>
-					<!-- 分栏编辑：跳转完整编辑页（左右分栏预览），工具栏最右 -->
 					<NormalToolbar v-if="expandable" title="分栏编辑（左右分栏预览）" @onClick="expand">
-						<Icon icon="material-symbols:vertical-split" class="split-toolbar-icon" />
+						<template #trigger>
+							<Icon icon="material-symbols:vertical-split" class="split-toolbar-icon" />
+						</template>
 					</NormalToolbar>
 				</template>
 			</MdEditor>
