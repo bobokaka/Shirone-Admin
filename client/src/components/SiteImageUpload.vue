@@ -320,7 +320,7 @@
 		width: 168px;
 		height: 96px;
 		border-radius: 10px;
-		border: 1px solid var(--glass-border-soft);
+		border: 1px solid var(--el-border-color-lighter);
 	}
 	.remote-badge {
 		position: absolute;
@@ -341,7 +341,7 @@
 	}
 	.site-image-src {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -385,7 +385,7 @@
 	.url-preview {
 		height: 200px;
 		margin-top: 12px;
-		border: 1px solid var(--glass-border-soft);
+		border: 1px solid var(--el-border-color-lighter);
 		border-radius: 12px;
 		overflow: hidden;
 		background: var(--el-fill-color-light);
@@ -403,7 +403,7 @@
 		justify-content: center;
 		gap: 8px;
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		padding: 0 24px;
 		text-align: center;
 	}
@@ -421,7 +421,7 @@
 		align-items: flex-start;
 		gap: 12px;
 		padding: 12px 14px;
-		border: 1px solid var(--glass-border-soft);
+		border: 1px solid var(--el-border-color-lighter);
 		border-radius: 12px;
 		background: transparent;
 		cursor: pointer;
@@ -454,7 +454,7 @@
 	}
 	.mode-desc {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		margin-top: 2px;
 	}
 </style>

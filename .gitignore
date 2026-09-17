@@ -18,3 +18,4 @@ openspec/
 # docs 仅保留空目录（.gitkeep），截图等本地内容不入库
 docs/*
 !docs/.gitkeep
+.vscode

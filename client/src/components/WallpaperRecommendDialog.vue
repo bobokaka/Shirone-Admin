@@ -233,8 +233,8 @@
 	}
 	.wp-card {
 		width: calc((100% - 42px) / 4);
-		border: 1px solid var(--glass-border-soft);
-		border-radius: 12px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
 		overflow: hidden;
 		background: var(--el-fill-color-light);
 	}
@@ -271,9 +271,9 @@
 		backdrop-filter: blur(2px);
 		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 	}
-	/* 选中态：紫色实底填充（压过上面的半透明白底） */
+	/* 选中态：主色实底填充（压过上面的半透明白底） */
 	.wp-check :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
-		background: var(--accent-b, #a855f7);
+		background: var(--el-color-primary);
 		border-color: #fff;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 	}

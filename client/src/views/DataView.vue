@@ -537,11 +537,9 @@
 					<el-icon><Icon icon="material-symbols:auto-awesome" /></el-icon>AI起草
 				</el-button>
 				<div class="grow"></div>
-				<el-tooltip content="重新读取" placement="top">
-					<el-button circle :loading="loadingByKind[activeKind]" @click="load(activeKind, true)">
-						<el-icon><Refresh /></el-icon>
-					</el-button>
-				</el-tooltip>
+				<el-button :loading="loadingByKind[activeKind]" @click="load(activeKind, true)">
+					<el-icon><Refresh /></el-icon>重新读取
+				</el-button>
 			</div>
 
 			<div class="table-wrap">
@@ -909,9 +907,9 @@
 		font-size: 20px;
 		color: var(--el-text-color-secondary);
 	}
-	/* 试听中的行：淡靛底色标记 */
+	/* 试听中的行：淡主色底标记 */
 	.data-view :deep(tr.music-playing-row > td.el-table__cell) {
-		background-color: rgba(99, 102, 241, 0.07);
+		background-color: var(--el-color-primary-light-9);
 	}
 	.cell-icon {
 		display: flex;
@@ -931,7 +929,7 @@
 		padding: 2px 8px;
 		border: 1px solid var(--el-border-color);
 		border-radius: 4px;
-		background: #fff;
+		background: var(--el-bg-color);
 		font-size: 20px;
 		color: var(--el-text-color-regular);
 		line-height: 18px;
@@ -960,15 +958,15 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.14);
-		color: var(--text-sub, #909399);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 	}
 	.cell-cover-fallback {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.14);
-		color: var(--text-sub, #909399);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 	}
 	.image-field {
 		width: 100%;
@@ -990,8 +988,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.14);
-		color: var(--text-sub, #909399);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 	}
 	.image-field-ops {
 		display: flex;
@@ -1013,7 +1011,7 @@
 	}
 	.progress-summary {
 		font-size: 20px;
-		color: var(--text-sub, #909399);
+		color: var(--el-text-color-secondary);
 	}
 	.progress-field :deep(.el-slider) {
 		margin: 4px 0 0;

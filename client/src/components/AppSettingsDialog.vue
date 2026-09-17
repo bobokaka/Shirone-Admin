@@ -299,8 +299,8 @@
 								<div class="ai-col-head-right">
 									<span class="ai-col-head-label" title="启用后编辑器与数据页出现 AI 辅助入口">启用</span>
 									<el-switch v-model="form.enable" />
-									<el-button circle title="新增服务商" @click="addProvider">
-										<el-icon><Plus /></el-icon>
+									<el-button @click="addProvider">
+										<el-icon><Plus /></el-icon>新增
 									</el-button>
 								</div>
 							</div>
@@ -324,10 +324,11 @@
 										class="ai-provider-del"
 										size="small"
 										text
+										type="danger"
 										title="删除该服务商"
 										@click.stop="removeProvider(p)"
 									>
-										<el-icon><Delete /></el-icon>
+										<el-icon><Delete /></el-icon>删除
 									</el-button>
 								</span>
 							</div>

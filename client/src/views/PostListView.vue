@@ -5,6 +5,7 @@
 	import { MdPreview } from "md-editor-v3";
 	import type { BatchPostAction, NavBarLink, PostFile, PostMeta } from "@shirone-admin/shared";
 	import { postApi, settingsApi, taxonomyApi } from "../api";
+	import { useTheme } from "../composables/useTheme";
 	import { localMediaSanitize, postPreviewBody } from "../utils/content-media";
 	import {
 		NAV_DROP_MIME,
@@ -22,6 +23,7 @@
 
 	const router = useRouter();
 	const route = useRoute();
+	const { isDark } = useTheme();
 	const posts = ref<PostMeta[]>([]);
 	const loading = ref(false);
 	const keyword = ref("");
@@ -654,8 +656,8 @@
 									<el-button plain @click="openSitePreview">
 										<el-icon><View /></el-icon>站点预览
 									</el-button>
-									<el-button plain title="刷新" @click="load">
-										<el-icon><Refresh /></el-icon>
+									<el-button plain @click="load">
+										<el-icon><Refresh /></el-icon>刷新
 									</el-button>
 								</div>
 								<div class="list-head-row">
@@ -780,33 +782,34 @@
 										<span class="preview-title-text">{{ detail.meta.title }}</span>
 									</h2>
 									<div class="preview-ops">
-										<el-button type="primary" plain @click="startInlineEdit">
-											<el-icon><Edit /></el-icon>编辑
-										</el-button>
-										<el-button
-											plain
-											:loading="pinToggling === selected.path"
-											@click="togglePin(selected)"
-										>
-											<el-icon><Top /></el-icon>{{ selected.pinned ? "取消置顶" : "置顶" }}
-										</el-button>
-										<el-button
-											v-if="detail.meta.draft"
-											type="success"
-											:loading="publishToggling"
-											@click="togglePublish(detail.meta)"
-										>
-											<el-icon><Promotion /></el-icon>发布
-										</el-button>
-										<el-button
-											v-else
-											type="warning"
-											:loading="publishToggling"
-											@click="togglePublish(detail.meta)"
-										>
-											<el-icon><RefreshLeft /></el-icon>撤回发布
-										</el-button>
-										<el-button type="danger" plain @click="remove(selected)">删除</el-button>
+										<el-button-group>
+											<el-button type="primary" @click="startInlineEdit">
+												<el-icon><Edit /></el-icon>编辑
+											</el-button>
+											<el-button
+												:loading="pinToggling === selected.path"
+												@click="togglePin(selected)"
+											>
+												<el-icon><Top /></el-icon>{{ selected.pinned ? "取消置顶" : "置顶" }}
+											</el-button>
+											<el-button
+												v-if="detail.meta.draft"
+												type="success"
+												:loading="publishToggling"
+												@click="togglePublish(detail.meta)"
+											>
+												<el-icon><Promotion /></el-icon>发布
+											</el-button>
+											<el-button
+												v-else
+												type="warning"
+												:loading="publishToggling"
+												@click="togglePublish(detail.meta)"
+											>
+												<el-icon><RefreshLeft /></el-icon>撤回发布
+											</el-button>
+											<el-button type="danger" @click="remove(selected)">删除</el-button>
+										</el-button-group>
 									</div>
 								</div>
 								<div class="preview-meta">
@@ -824,7 +827,12 @@
 								</div>
 							</div>
 							<div class="preview-scroll">
-								<MdPreview editor-id="post-preview" :model-value="previewBody" :sanitize="mediaSanitize" />
+								<MdPreview
+									editor-id="post-preview"
+									:model-value="previewBody"
+									:theme="isDark ? 'dark' : 'light'"
+									:sanitize="mediaSanitize"
+								/>
 							</div>
 						</template>
 						<el-empty v-else-if="!detailLoading" description="选择左侧文章查看内容" class="preview-empty" />
@@ -902,16 +910,16 @@
 		justify-content: center;
 		gap: 6px;
 		padding: 10px 4px;
-		border: 1px solid var(--hairline);
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.55);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
+		background: var(--el-bg-color);
 		cursor: grab;
 		user-select: none;
 		text-align: center;
 	}
 	.preset-card:hover {
-		border-color: rgba(230, 162, 60, 0.45);
-		background: rgba(255, 255, 255, 0.72);
+		border-color: var(--el-color-warning-light-5);
+		background: var(--el-color-warning-light-9);
 	}
 	.preset-card:active {
 		cursor: grabbing;
@@ -922,8 +930,8 @@
 		cursor: not-allowed;
 	}
 	.preset-card.is-disabled:hover {
-		border-color: var(--hairline);
-		background: rgba(255, 255, 255, 0.55);
+		border-color: var(--el-border-color-lighter);
+		background: var(--el-bg-color);
 	}
 	.preset-card__name {
 		font-size: 18px;
@@ -982,7 +990,6 @@
 	}
 	.post-item-check :deep(.el-checkbox__inner) {
 		border-width: 1.5px;
-		box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
 	}
 	.post-item-check :deep(.el-checkbox__inner::after) {
 		width: 4px;
@@ -1022,13 +1029,11 @@
 		gap: 8px;
 		padding: 10px 12px;
 		border: 1px solid var(--el-border-color-lighter);
-		border-radius: 10px;
+		border-radius: 6px;
 		background: var(--el-bg-color);
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 		cursor: pointer;
 		transition:
 			border-color 0.15s ease,
-			box-shadow 0.15s ease,
 			background-color 0.15s ease;
 	}
 	.post-item-main {
@@ -1037,12 +1042,10 @@
 	}
 	.post-item:hover {
 		border-color: var(--el-border-color);
-		box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
 	}
 	.post-item.active {
 		border-color: var(--el-color-primary);
-		background: rgba(99, 102, 241, 0.08);
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+		background: var(--el-color-primary-light-9);
 	}
 	.post-item-title-row {
 		display: flex;
@@ -1074,7 +1077,7 @@
 		border-radius: 999px;
 		border: 1px solid var(--el-color-success-light-8);
 		background: var(--el-color-success-light-9);
-		color: #15803d;
+		color: var(--el-color-success);
 		font-size: 12px;
 		line-height: 1;
 		cursor: pointer;
@@ -1102,7 +1105,7 @@
 	.pin-toggle:hover {
 		border-color: var(--el-color-primary);
 		background: var(--el-color-primary);
-		color: #fff;
+		color: var(--el-color-white);
 	}
 	.pin-toggle:hover .pin-toggle__label--idle {
 		opacity: 0;
@@ -1213,9 +1216,9 @@
 		overflow: auto;
 	}
 	.preview-scroll :deep(.md-editor) {
-		--md-bk-color: #fff;
-		border-radius: 12px;
-		/* 空正文也撑满：白色纸张面不塌缩成一条 */
+		--md-bk-color: var(--el-bg-color);
+		border-radius: 6px;
+		/* 空正文也撑满：纸张面不塌缩成一条 */
 		min-height: 100%;
 		box-sizing: border-box;
 	}
@@ -1259,12 +1262,5 @@
 	.muted {
 		color: var(--el-text-color-secondary);
 		font-size: 18px;
-	}
-	/* 状态标签文字加深：EP 默认 success/warning 文字色在浅底上对比不足 */
-	.post-list-page :deep(.el-tag--success) {
-		--el-tag-text-color: #15803d;
-	}
-	.post-list-page :deep(.el-tag--warning) {
-		--el-tag-text-color: #b45309;
 	}
 </style>

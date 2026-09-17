@@ -378,12 +378,11 @@
 							<el-button
 								class="behind-btn"
 								size="small"
-								circle
 								:loading="fetching"
 								title="与远端比对（不拉取代码）"
 								@click="refreshBehind"
 							>
-								<el-icon v-if="!fetching"><Icon icon="material-symbols:refresh" /></el-icon>
+								<el-icon v-if="!fetching"><Icon icon="material-symbols:refresh" /></el-icon>比对远端
 							</el-button>
 						</el-descriptions-item>
 						<el-descriptions-item label="主题依赖">
@@ -404,12 +403,11 @@
 							<el-button
 								class="behind-btn"
 								size="small"
-								circle
 								:loading="fetching"
 								title="与远端比对（不拉取代码）"
 								@click="refreshBehind"
 							>
-								<el-icon v-if="!fetching"><Icon icon="material-symbols:refresh" /></el-icon>
+								<el-icon v-if="!fetching"><Icon icon="material-symbols:refresh" /></el-icon>比对远端
 							</el-button>
 						</el-descriptions-item>
 					</el-descriptions>

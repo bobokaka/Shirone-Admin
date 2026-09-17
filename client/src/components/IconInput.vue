@@ -279,7 +279,7 @@
 		padding: 0;
 		border: 1px solid var(--el-border-color);
 		border-radius: 8px;
-		background: rgba(255, 255, 255, 0.6);
+		background: var(--el-bg-color);
 		color: var(--el-text-color-secondary);
 		cursor: pointer;
 		transition: border-color 0.15s;
@@ -325,11 +325,11 @@
 		color: var(--el-text-color-regular);
 	}
 	.picker-tile:hover {
-		background: rgba(99, 102, 241, 0.08);
+		background: var(--el-color-primary-light-9);
 	}
 	.picker-tile--on {
 		border-color: var(--el-color-primary);
-		background: rgba(99, 102, 241, 0.1);
+		background: var(--el-color-primary-light-9);
 	}
 	.picker-empty {
 		grid-column: 1 / -1;
@@ -382,7 +382,7 @@
 		height: 40px;
 		border: 1px solid var(--el-border-color-lighter);
 		border-radius: 8px;
-		background: rgba(128, 128, 150, 0.08);
+		background: var(--el-fill-color-light);
 		color: var(--el-text-color-secondary);
 		overflow: hidden;
 	}

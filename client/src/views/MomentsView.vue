@@ -659,9 +659,8 @@
 	.upload-trigger {
 		width: 104px;
 		height: 104px;
-		/* 主题 hairline 过淡，默认给明显虚线框 + 浅底，悬浮才换主题色 */
-		border: 1.5px dashed rgba(120, 120, 160, 0.45);
-		background: rgba(120, 120, 160, 0.06);
+		border: 1.5px dashed var(--el-border-color);
+		background: var(--el-fill-color-light);
 		border-radius: 8px;
 		display: flex;
 		align-items: center;

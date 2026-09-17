@@ -266,15 +266,14 @@
 		display: flex;
 		gap: 12px;
 		padding: 10px;
-		border: 1px solid var(--hairline);
-		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.45);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
+		background: var(--el-bg-color);
 		cursor: pointer;
-		transition: border-color 0.2s ease, box-shadow 0.2s ease;
+		transition: border-color 0.2s ease;
 	}
 	.candidate-card:hover {
-		border-color: var(--accent-a);
-		box-shadow: 0 4px 16px rgba(99, 102, 241, 0.15);
+		border-color: var(--el-color-primary);
 	}
 	.candidate-cover,
 	.candidate-cover-fallback {
@@ -289,8 +288,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.14);
-		color: var(--text-sub, #909399);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 		font-size: 20px;
 	}
 	.candidate-info {
@@ -309,11 +308,11 @@
 	}
 	.candidate-meta {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.candidate-summary {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		line-height: 1.5;
 	}
 	.detail-area {
@@ -346,12 +345,12 @@
 	.detail-original {
 		font-size: 20px;
 		font-weight: 400;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		margin-left: 6px;
 	}
 	.detail-line {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.detail-tags {
 		display: flex;
@@ -368,7 +367,7 @@
 	}
 	.detail-src {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.detail-status {
 		display: flex;
@@ -376,6 +375,6 @@
 		gap: 12px;
 		margin-top: 14px;
 		padding-top: 10px;
-		border-top: 1px dashed var(--hairline);
+		border-top: 1px dashed var(--el-border-color-lighter);
 	}
 </style>

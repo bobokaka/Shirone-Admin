@@ -88,7 +88,7 @@
 		width: 100%;
 		height: 100%;
 		border-radius: 6px;
-		background: rgba(128, 128, 150, 0.14);
+		background: var(--el-fill-color);
 		color: var(--el-text-color-secondary);
 		font-weight: 600;
 		line-height: 1;

@@ -1193,9 +1193,9 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 	}
 	/* 分区：内嵌面板 */
 	.sec {
-		background: rgba(255, 255, 255, 0.36);
-		border: 1px solid var(--hairline);
-		border-radius: 14px;
+		background: var(--el-fill-color-light);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
 		padding: 16px 18px 18px;
 		margin-bottom: 14px;
 	}
@@ -1255,10 +1255,10 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		flex: 1;
 		min-width: 250px;
 		max-width: 330px;
-		border: 1px solid var(--hairline);
-		border-radius: 12px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
 		padding: 10px 12px;
-		background: rgba(255, 255, 255, 0.4);
+		background: var(--el-fill-color-light);
 	}
 	.favicon-slot-head {
 		display: flex;
@@ -1277,8 +1277,9 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 	.favicon-img {
 		width: 44px;
 		height: 44px;
-		border-radius: 10px;
-		border: 1px solid var(--glass-border-soft);
+		border-radius: 6px;
+		border: 1px solid var(--el-border-color-lighter);
+		/* favicon 检视面固定白底：图标按亮色背景设计，暗色模式下不反色 */
 		background: #fff;
 		flex: none;
 	}
@@ -1290,8 +1291,8 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.12);
-		color: var(--text-sub);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 	}
 	.favicon-slot-ops {
 		display: flex;
@@ -1307,7 +1308,7 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		align-items: center;
 		justify-content: center;
 		height: 100%;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		font-size: 20px;
 	}
 	.tz-select {
@@ -1329,7 +1330,7 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		gap: 8px;
 	}
 	.avatar-url-icon {
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.avatar-ops {
 		display: flex;
@@ -1366,7 +1367,7 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		max-width: 900px;
 		margin: 14px 0 8px;
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.footer-lib-ops {
 		display: flex;
@@ -1391,8 +1392,8 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 	.footer-img-thumb {
 		width: 168px;
 		height: 96px;
-		border-radius: 10px;
-		border: 1px solid var(--glass-border-soft);
+		border-radius: 6px;
+		border: 1px solid var(--el-border-color-lighter);
 	}
 	.footer-img-fallback {
 		width: 100%;
@@ -1400,8 +1401,8 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.12);
-		color: var(--text-sub);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 	}
 	.footer-img-meta {
 		display: flex;
@@ -1412,7 +1413,7 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 		flex: 1;
 		min-width: 0;
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -1428,13 +1429,14 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 	.footer-lib-empty {
 		margin: 0;
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.footer-preview {
 		width: 100%;
 		height: 260px;
-		border: 1px solid var(--glass-border-soft);
-		border-radius: 12px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
+		/* 页脚 HTML 预览固定白底：检视线上真实观感，暗色模式下不反色 */
 		background: #fff;
 	}
 
@@ -1471,9 +1473,8 @@ ${custom ? `<div class="custom-slot">${custom}</div>` : ""}
 	.palette-chip {
 		width: 46px;
 		height: 28px;
-		border-radius: 8px;
-		border: 1px solid var(--glass-border-soft);
-		box-shadow: var(--glass-shadow);
+		border-radius: 4px;
+		border: 1px solid var(--el-border-color);
 	}
 	.banner-group-label {
 		display: flex;

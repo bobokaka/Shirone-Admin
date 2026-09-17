@@ -129,7 +129,7 @@
 	.bar.with-title {
 		padding: 12px 20px;
 		margin-bottom: 0;
-		border-bottom: 1px solid var(--hairline);
+		border-bottom: 1px solid var(--el-border-color-lighter);
 	}
 
 	.bar-title {
@@ -154,8 +154,8 @@
 
 	.frame-wrap {
 		min-height: 320px;
-		border: 1px solid var(--glass-border-soft);
-		border-radius: 10px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
 		overflow: hidden;
 	}
 

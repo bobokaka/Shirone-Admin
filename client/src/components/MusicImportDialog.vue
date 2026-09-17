@@ -373,9 +373,9 @@
 		flex-direction: column;
 		gap: 6px;
 		padding: 12px 14px;
-		border: 1px solid var(--hairline);
-		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.45);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		background: var(--el-bg-color);
 	}
 	.mc-head {
 		display: flex;
@@ -389,7 +389,7 @@
 	}
 	.mc-artist {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.mc-summary {
 		font-size: 20px;
@@ -403,7 +403,7 @@
 		font-size: 20px;
 	}
 	.mc-no-audio {
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.mc-ops {
 		display: flex;

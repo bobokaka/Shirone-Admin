@@ -768,7 +768,7 @@
 		height: 3px;
 		border-radius: 2px;
 		background: var(--el-color-primary);
-		box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
+		box-shadow: 0 0 0 3px var(--el-color-primary-light-7);
 		pointer-events: none;
 		z-index: 1;
 	}
@@ -778,21 +778,21 @@
 		font-size: calc(20px + var(--font-shift, 0px));
 		color: var(--el-text-color-secondary);
 	}
-	/* 卡片树：白玻璃卡片 + 左缘类型色条；类型色经 --nav-accent 下发
-	   （预设=橙 与预设卡片弹层同色、分组=极光紫、自定义链接=绿） */
+	/* 卡片树：卡片行 + 左缘类型色条；类型色经 --nav-accent 下发
+	   （预设=橙、分组=主色、自定义链接=绿），全部走 EP 变量适配明暗 */
 	.nav-row {
 		--nav-accent: var(--el-text-color-secondary);
-		--nav-accent-border: rgba(120, 120, 160, 0.32);
-		--nav-tag-border: rgba(120, 120, 160, 0.5);
-		/* 名称/图标用色：默认跟类型色（自定义链接覆盖为黑色） */
+		--nav-accent-border: var(--el-border-color);
+		--nav-tag-border: var(--el-border-color);
+		/* 名称/图标用色：默认跟类型色（自定义链接覆盖为主文字色） */
 		--nav-text: var(--nav-accent);
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		padding: 5px 8px 5px 12px;
-		border: 1px solid var(--hairline);
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.55);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
+		background: var(--el-bg-color);
 		box-shadow: inset 3px 0 0 var(--nav-accent);
 		cursor: grab;
 		user-select: none;
@@ -803,32 +803,32 @@
 	}
 	.nav-row--preset {
 		--nav-accent: var(--el-color-warning);
-		--nav-accent-border: rgba(230, 162, 60, 0.45);
-		--nav-tag-border: rgba(230, 162, 60, 0.65);
+		--nav-accent-border: var(--el-color-warning-light-5);
+		--nav-tag-border: var(--el-color-warning-light-5);
 	}
 	.nav-row--group {
-		--nav-accent: var(--accent-b);
-		--nav-accent-border: rgba(168, 85, 247, 0.4);
-		--nav-tag-border: rgba(168, 85, 247, 0.6);
+		--nav-accent: var(--el-color-primary);
+		--nav-accent-border: var(--el-color-primary-light-5);
+		--nav-tag-border: var(--el-color-primary-light-5);
 	}
 	.nav-row--link {
 		--nav-accent: var(--el-color-success);
-		--nav-accent-border: rgba(103, 194, 58, 0.4);
-		--nav-tag-border: rgba(103, 194, 58, 0.6);
-		/* 链接行名称/图标用黑色，类型感只留左缘条与徽标 */
+		--nav-accent-border: var(--el-color-success-light-5);
+		--nav-tag-border: var(--el-color-success-light-5);
+		/* 链接行名称/图标用主文字色，类型感只留左缘条与徽标 */
 		--nav-text: var(--el-text-color-primary);
 	}
 	.nav-row:hover {
 		border-color: var(--nav-accent-border);
-		background: rgba(255, 255, 255, 0.72);
+		background: var(--el-fill-color-light);
 	}
 	.nav-row:active {
 		cursor: grabbing;
 	}
-	/* 命中当前文章：靛蓝选中态覆盖类型色 */
+	/* 命中当前文章：主色选中态覆盖类型色 */
 	.nav-row--active {
-		background: rgba(99, 102, 241, 0.1);
-		border-color: rgba(99, 102, 241, 0.4);
+		background: var(--el-color-primary-light-9);
+		border-color: var(--el-color-primary-light-5);
 		box-shadow: inset 3px 0 0 var(--el-color-primary);
 	}
 	/* 加一档优先级：压过 DataIcon 自身的 .data-icon 默认色（同为单类选择器会受打包顺序影响） */
@@ -851,7 +851,7 @@
 	}
 	.nav-row__toggle:hover {
 		color: var(--nav-text);
-		background: rgba(120, 120, 160, 0.14);
+		background: var(--el-fill-color);
 	}
 	.nav-row__toggle .el-icon {
 		transition: transform 0.15s;
@@ -934,13 +934,13 @@
 		font-size: calc(20px + var(--font-shift, 0px));
 		line-height: 1;
 	}
-	/* 分类行/未分类节点接收文章拖入：蓝色放置高亮（保留左缘类型条） */
+	/* 分类行/未分类节点接收文章拖入：主色放置高亮（保留左缘类型条） */
 	.nav-row--drop {
 		border-color: var(--el-color-primary);
-		background: rgba(64, 158, 255, 0.12);
+		background: var(--el-color-primary-light-8);
 		box-shadow:
 			inset 3px 0 0 var(--el-color-primary),
-			0 0 0 3px rgba(64, 158, 255, 0.15);
+			0 0 0 3px var(--el-color-primary-light-7);
 	}
 	/* 子级：缩进 + 左侧引导线（卡片之间由 .nav-list 的 gap 分隔） */
 	.nav-sub {
@@ -960,25 +960,25 @@
 		gap: 6px;
 		padding: 3px 10px;
 		border: 1px solid transparent;
-		border-radius: 8px;
-		background: rgba(255, 255, 255, 0.4);
+		border-radius: 6px;
+		background: var(--el-fill-color-light);
 		cursor: pointer;
 		user-select: none;
 	}
-	/* 分类行悬停：靛蓝显色（选中态的浅一档），明确落点 */
+	/* 分类行悬停：主色显色（选中态的浅一档），明确落点 */
 	.cat-row:hover {
-		border-color: rgba(99, 102, 241, 0.35);
-		background: rgba(99, 102, 241, 0.07);
+		border-color: var(--el-color-primary-light-5);
+		background: var(--el-color-primary-light-9);
 	}
 	.cat-row--active {
-		background: rgba(99, 102, 241, 0.12);
-		border-color: rgba(99, 102, 241, 0.35);
+		background: var(--el-color-primary-light-8);
+		border-color: var(--el-color-primary-light-5);
 	}
-	/* 文章拖入分类行：放置高亮（与导航蓝线同色系） */
+	/* 文章拖入分类行：放置高亮 */
 	.cat-row--drop {
 		border-color: var(--el-color-primary);
-		background: rgba(64, 158, 255, 0.12);
-		box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.15);
+		background: var(--el-color-primary-light-8);
+		box-shadow: 0 0 0 3px var(--el-color-primary-light-7);
 	}
 	/* 分类行内改名：输入框占满余宽，操作按钮悬停浮出（同导航行） */
 	.cat-row__edit {

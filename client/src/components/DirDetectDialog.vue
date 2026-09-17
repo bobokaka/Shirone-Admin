@@ -111,8 +111,8 @@
 	.detect-item {
 		display: flex;
 		flex-direction: column;
-		border: 1px solid var(--glass-border-soft);
-		border-radius: 10px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
 		padding: 8px 14px;
 		cursor: pointer;
 	}

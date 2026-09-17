@@ -5,6 +5,7 @@
 	import { MdEditor, type ToolbarNames } from "md-editor-v3";
 	import type { JianshuPasteResult } from "@shirone-admin/shared";
 	import { importApi, postApi } from "../api";
+	import { useTheme } from "../composables/useTheme";
 	import { localMediaSanitize } from "../utils/content-media";
 
 	/**
@@ -17,6 +18,7 @@
 	const emit = defineEmits<{ exit: [] }>();
 
 	const router = useRouter();
+	const { isDark } = useTheme();
 
 	/* ---------- 向导状态机：本地 0 导入文件 → 1 确认内容 → 2 转换 → 3 信息 → 4 完成；简书少一步入口 ---------- */
 	const step = ref(0);
@@ -694,6 +696,7 @@
 					:toolbars="pasteToolbars"
 					:preview="true"
 					:footers="[]"
+					:theme="isDark ? 'dark' : 'light'"
 					:sanitize="mediaSanitize"
 					:placeholder="local ? '内容已读取，可在此微调后再转换…' : '在此粘贴文章内容…'"
 				/>
@@ -762,6 +765,7 @@
 							:toolbars="pasteToolbars"
 							:preview="true"
 							:footers="[]"
+							:theme="isDark ? 'dark' : 'light'"
 							:sanitize="convertSanitize"
 							placeholder=""
 						/>
@@ -917,9 +921,9 @@
 		justify-content: center;
 		gap: 6px;
 		padding: 44px 24px;
-		border: 1px dashed rgba(99, 102, 241, 0.45);
-		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.5);
+		border: 1px dashed var(--el-color-primary-light-5);
+		border-radius: 8px;
+		background: var(--el-fill-color-light);
 		cursor: pointer;
 		text-align: center;
 		transition:
@@ -929,7 +933,7 @@
 	.drop-zone:hover,
 	.drop-zone:focus-visible {
 		border-color: var(--el-color-primary);
-		background: rgba(99, 102, 241, 0.06);
+		background: var(--el-color-primary-light-9);
 		outline: none;
 	}
 	.upload-text {
@@ -943,9 +947,9 @@
 		gap: 8px;
 		margin: 0 20px 10px;
 		padding: 10px 16px;
-		border: 1px solid var(--hairline);
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.4);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		background: var(--el-fill-color-light);
 		font-size: 20px;
 	}
 	.file-name {
@@ -964,7 +968,7 @@
 	.paste-head-label {
 		flex: none;
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 	.paste-head :deep(.el-input) {
 		flex: 1;
@@ -979,11 +983,11 @@
 		height: 100%;
 	}
 	.paste-editor :deep(.md-editor-preview-wrapper) {
-		border-left: 1px solid var(--hairline);
+		border-left: 1px solid var(--el-border-color-lighter);
 	}
 	.paste-editor :deep(.md-editor-preview-wrapper),
 	.paste-editor :deep(.md-editor-preview) {
-		background: #fcfcfd;
+		background: var(--el-bg-color);
 	}
 	.converted-line {
 		font-size: 20px;
@@ -999,9 +1003,9 @@
 
 	/* ---- 卡内分区：轻底描边面板 ---- */
 	.panel {
-		border: 1px solid var(--hairline);
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.35);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		background: var(--el-fill-color-light);
 		padding: 16px 18px;
 	}
 	.panel-head {
@@ -1039,13 +1043,12 @@
 	.convert-doc-icon {
 		width: 84px;
 		height: 84px;
-		border-radius: 22px;
+		border-radius: 16px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: #fff;
-		background: linear-gradient(135deg, #6366f1, #c084fc);
-		box-shadow: 0 10px 26px rgba(99, 102, 241, 0.35);
+		color: var(--el-color-white);
+		background: var(--el-color-primary);
 	}
 	.convert-doc-title {
 		font-size: 24px;

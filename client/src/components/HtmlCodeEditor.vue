@@ -62,10 +62,10 @@
 
 <style scoped>
 	.html-editor {
-		border: 1px solid var(--glass-border-soft);
-		border-radius: 12px;
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 6px;
 		overflow: hidden;
-		background: rgba(255, 255, 255, 0.62);
+		background: var(--el-bg-color);
 	}
 	.html-editor :deep(.cm-editor) {
 		height: 100%;

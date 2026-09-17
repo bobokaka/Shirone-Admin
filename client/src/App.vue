@@ -4,6 +4,7 @@
 	import { ElMessage } from "element-plus";
 	import { useSystemStore } from "./stores/system";
 	import { useAiConsoleStore } from "./stores/aiConsole";
+	import { useTheme } from "./composables/useTheme";
 	import AppSettingsDialog from "./components/AppSettingsDialog.vue";
 	import AiConsole from "./components/AiConsole.vue";
 
@@ -11,6 +12,7 @@
 	const sys = useSystemStore();
 	const ai = useAiConsoleStore();
 	const settingsOpen = ref(false);
+	const { isDark, toggle: toggleTheme } = useTheme();
 
 	const title = computed(() => (route.meta.title as string) ?? "");
 
@@ -59,6 +61,11 @@
 					</el-tag>
 					<el-tooltip content="AI 控制台" placement="bottom">
 						<el-button class="gear-btn" text circle @click="ai.toggle()">✨</el-button>
+					</el-tooltip>
+					<el-tooltip :content="isDark ? '切换亮色模式' : '切换暗色模式'" placement="bottom">
+						<el-button class="gear-btn" text circle @click="toggleTheme">
+							<el-icon :size="18"><Sunny v-if="isDark" /><Moon v-else /></el-icon>
+						</el-button>
 					</el-tooltip>
 					<el-tooltip content="设置" placement="bottom">
 						<el-button class="gear-btn" text circle @click="settingsOpen = true">

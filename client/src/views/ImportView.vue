@@ -505,16 +505,8 @@
 		display: flex;
 		flex-direction: column;
 	}
-	/* tab 头：独立渐变色卡，与下方内容区分开（四周留白，不贴底） */
 	.import-view :deep(.platform-tabs > .el-tabs__header) {
 		margin: 0 0 16px;
-		padding: 8px 16px;
-		background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(192, 132, 252, 0.07));
-		border: 1px solid rgba(99, 102, 241, 0.22);
-		border-radius: 12px;
-	}
-	.import-view :deep(.platform-tabs > .el-tabs__header .el-tabs__nav-wrap::after) {
-		display: none; /* 去默认灰线，改用色卡描边 */
 	}
 	.import-view :deep(.el-tabs__item) {
 		font-size: 20px;
@@ -586,20 +578,16 @@
 		align-items: center;
 		gap: 8px;
 		padding: 28px 22px 24px;
-		border: 1px solid rgba(99, 102, 241, 0.16);
-		border-radius: 18px;
-		background: rgba(255, 255, 255, 0.6);
-		box-shadow: 0 6px 22px rgba(99, 102, 241, 0.08);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		background: var(--el-bg-color);
 		cursor: pointer;
 		transition:
 			transform 0.2s ease,
-			border-color 0.2s ease,
-			box-shadow 0.2s ease;
+			border-color 0.2s ease;
 	}
 	.mode-card:hover {
-		transform: translateY(-4px);
-		border-color: rgba(99, 102, 241, 0.5);
-		box-shadow: 0 14px 34px rgba(99, 102, 241, 0.2);
+		border-color: var(--el-color-primary-light-5);
 	}
 	.mode-card:active {
 		transform: translateY(-1px);
@@ -610,15 +598,10 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border-radius: 16px;
-		color: #fff;
-		background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
-		box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
+		border-radius: 12px;
+		color: var(--el-color-white);
+		background: var(--el-color-primary);
 		margin-bottom: 6px;
-		transition: transform 0.2s ease;
-	}
-	.mode-card:hover .mode-icon {
-		transform: scale(1.08);
 	}
 	.mode-title {
 		font-size: 22px;
@@ -626,7 +609,7 @@
 	}
 	.mode-desc {
 		font-size: 20px;
-		color: var(--text-sub);
+		color: var(--el-text-color-secondary);
 	}
 
 	/* ---- 导出包：上传 ---- */
@@ -665,9 +648,9 @@
 
 	/* ---- 卡内分区：轻底描边面板 ---- */
 	.panel {
-		border: 1px solid var(--hairline);
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.35);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		background: var(--el-fill-color-light);
 		padding: 16px 18px;
 	}
 	.panel-head {
@@ -707,7 +690,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
-		border-bottom: 1px dashed var(--hairline);
+		border-bottom: 1px dashed var(--el-border-color-lighter);
 		padding-bottom: 6px;
 		margin-bottom: 6px;
 	}

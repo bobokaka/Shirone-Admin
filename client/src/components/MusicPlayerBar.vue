@@ -284,10 +284,9 @@
 		row-gap: 6px;
 		margin-top: 10px;
 		padding: 8px 16px;
-		border: 1px solid var(--glass-border-soft);
-		border-radius: 14px;
-		background: var(--glass-bg);
-		box-shadow: var(--glass-shadow);
+		border: 1px solid var(--el-border-color-lighter);
+		border-radius: 8px;
+		background: var(--el-bg-color);
 	}
 	.bar-cover,
 	.bar-cover--empty {
@@ -301,8 +300,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(128, 128, 150, 0.14);
-		color: var(--text-sub, #909399);
+		background: var(--el-fill-color);
+		color: var(--el-text-color-secondary);
 	}
 	.bar-meta {
 		flex: none;
@@ -318,7 +317,7 @@
 	}
 	.bar-artist {
 		font-size: 20px;
-		color: var(--text-sub, #5d5d78);
+		color: var(--el-text-color-secondary);
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;
@@ -336,7 +335,7 @@
 		flex: none;
 		font-size: 16px;
 		font-variant-numeric: tabular-nums;
-		color: var(--text-sub, #5d5d78);
+		color: var(--el-text-color-secondary);
 		white-space: nowrap;
 	}
 	.bar-slider {

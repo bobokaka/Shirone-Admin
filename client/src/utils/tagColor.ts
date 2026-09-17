@@ -5,13 +5,13 @@ function hueOf(name: string): number {
 	return h % 360;
 }
 
-/** 彩色标签样式（浅底深字，适配浅色主题） */
+/** 彩色标签样式（饱和度 / 亮度走 styles.css 的 --tag-* 变量，明暗主题自动切换） */
 export function tagColorStyle(name: string): Record<string, string> {
 	const h = hueOf(name);
 	return {
-		backgroundColor: `hsl(${h} 75% 88%)`,
-		borderColor: `hsl(${h} 65% 78%)`,
-		color: `hsl(${h} 55% 30%)`,
+		backgroundColor: `hsl(${h} var(--tag-s) var(--tag-bg-l))`,
+		borderColor: `hsl(${h} var(--tag-s) var(--tag-border-l))`,
+		color: `hsl(${h} var(--tag-s) var(--tag-text-l))`,
 	};
 }
 
@@ -19,8 +19,8 @@ export function tagColorStyle(name: string): Record<string, string> {
 export function categoryCardStyle(name: string): Record<string, string> {
 	const h = hueOf(name);
 	return {
-		backgroundColor: `hsl(${h} 70% 82%)`,
-		borderColor: `hsl(${h} 60% 70%)`,
-		color: `hsl(${h} 55% 26%)`,
+		backgroundColor: `hsl(${h} var(--cat-s) var(--cat-bg-l))`,
+		borderColor: `hsl(${h} var(--cat-s) var(--cat-border-l))`,
+		color: `hsl(${h} var(--cat-s) var(--cat-text-l))`,
 	};
 }
