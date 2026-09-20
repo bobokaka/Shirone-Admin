@@ -21,6 +21,7 @@
 		"codemirror": "^6.0.2",
 		"element-plus": "^2.9.3",
 		"md-editor-v3": "^4.21.0",
+		"mermaid": "^12.0.0",
 		"pinia": "^2.3.0",
 		"pinyin-pro": "^3.26.0",
 		"prettier": "^3.9.6",

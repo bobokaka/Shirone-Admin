@@ -86,9 +86,140 @@
 	/** 同一时刻只挂载一个编辑器，id 区分就地编辑与完整页便于排查 */
 	const editorId = computed(() => (props.expandable ? "post-inline-editor" : "post-editor"));
 
+	/** 左右分栏滚动联动（md-editor scrollAuto）：关闭后编辑/预览各自独立滚动；偏好持久化 */
+	const SCROLL_SYNC_KEY = "shirone-admin-scroll-sync";
+	const scrollSync = ref(localStorage.getItem(SCROLL_SYNC_KEY) !== "0");
+	function toggleScrollSync(): void {
+		scrollSync.value = !scrollSync.value;
+		localStorage.setItem(SCROLL_SYNC_KEY, scrollSync.value ? "1" : "0");
+	}
+
+	/* ---------- 联动校准：图片等异步资源加载完才撑开预览布局，而 md-editor 的锚点映射只在
+	   正文或分栏形态变化时重建，布局突变既不触发重算、也没有新的 scroll 事件——两栏错位会
+	   一直保持到用户再滚动。这里用 ResizeObserver 盯住预览内容根的尺寸（覆盖图片、mermaid、
+	   公式等一切布局变化来源），停顿后向编辑区补发 scroll 事件，让库以编辑区当前位置为基准
+	   按最新布局重排预览侧。基准固定为编辑区：校准派发不会移动编辑区自身（无回环），而预览侧
+	   位置在库的平滑滚动动画中是过时值、以其为基准会把编辑区拉错；另外动画进行中库有滚动锁，
+	   首次派发可能被吞，故追加一次延迟确认 ---------- */
+
+	const editorWrapEl = ref<HTMLElement>();
+	let calibrateTimer: ReturnType<typeof setTimeout> | null = null;
+	let calibrateConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+	let calibrateCmEl: HTMLElement | null = null;
+	let previewContentRo: ResizeObserver | null = null;
+
+	function dispatchCalibrate(): void {
+		if (scrollSync.value && calibrateCmEl) calibrateCmEl.dispatchEvent(new Event("scroll"));
+	}
+
+	/* ---------- mermaid 单图查看器：预览内禁用了库的滚轮缩放（劫持页面滚动，patch 移除），
+	   图表限宽自适应；点击进全屏查看器再看细节：滚轮缩放（光标为锚）、拖拽平移、双击复位 ---------- */
+
+	const mmViewer = ref<{ svg: string } | null>(null);
+	const mmViewerVisible = computed({
+		get: () => mmViewer.value !== null,
+		set: (v: boolean) => {
+			if (!v) mmViewer.value = null;
+		},
+	});
+	const mmStageEl = ref<HTMLElement>();
+	const mmInnerEl = ref<HTMLElement>();
+	const mmScale = ref(1);
+	const mmX = ref(0);
+	const mmY = ref(0);
+	const mmTransform = computed(() => ({
+		transform: `translate(${mmX.value}px, ${mmY.value}px) scale(${mmScale.value})`,
+	}));
+
+	/** 复位＝适宽适高不放大并居中（inner 绝对定位于舞台左上角，靠平移量居中） */
+	function mmReset(): void {
+		const stage = mmStageEl.value;
+		const inner = mmInnerEl.value;
+		if (!stage || !inner) {
+			mmScale.value = 1;
+			mmX.value = 0;
+			mmY.value = 0;
+			return;
+		}
+		const fit = Math.min(
+			1,
+			stage.clientWidth / inner.offsetWidth,
+			stage.clientHeight / inner.offsetHeight,
+		);
+		mmScale.value = fit;
+		mmX.value = (stage.clientWidth - inner.offsetWidth * fit) / 2;
+		mmY.value = (stage.clientHeight - inner.offsetHeight * fit) / 2;
+	}
+
+	watch(mmViewerVisible, (v) => {
+		if (v) void nextTick(mmReset);
+	});
+
+	function onMmWheel(e: WheelEvent): void {
+		const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+		const next = Math.min(8, Math.max(0.2, mmScale.value * factor));
+		if (next === mmScale.value) return;
+		// 以光标为锚：舞台坐标下保持 (cx - x) / scale 不变，反解新平移量
+		const rect = mmStageEl.value?.getBoundingClientRect();
+		if (rect) {
+			const cx = e.clientX - rect.left;
+			const cy = e.clientY - rect.top;
+			mmX.value = cx - ((cx - mmX.value) / mmScale.value) * next;
+			mmY.value = cy - ((cy - mmY.value) / mmScale.value) * next;
+		}
+		mmScale.value = next;
+	}
+
+	function onMmDragStart(e: MouseEvent): void {
+		const startX = e.clientX - mmX.value;
+		const startY = e.clientY - mmY.value;
+		const onMove = (ev: MouseEvent): void => {
+			mmX.value = ev.clientX - startX;
+			mmY.value = ev.clientY - startY;
+		};
+		const onUp = (): void => {
+			window.removeEventListener("mousemove", onMove);
+			window.removeEventListener("mouseup", onUp);
+		};
+		window.addEventListener("mousemove", onMove);
+		window.addEventListener("mouseup", onUp);
+	}
+
+	/** 预览内点击 mermaid 图 → 全屏查看该图（svg 克隆进查看器） */
+	function onEditorClick(e: MouseEvent): void {
+		const target = (e.target as HTMLElement).closest(".md-editor-mermaid[data-processed]");
+		const svg = target?.querySelector("svg");
+		if (svg) mmViewer.value = { svg: svg.outerHTML };
+	}
+
+	onMounted(async () => {
+		await nextTick();
+		const wrap = editorWrapEl.value;
+		if (!wrap || !props.split) return;
+		calibrateCmEl = wrap.querySelector(".cm-scroller");
+		const previewContent = wrap.querySelector("[id$='-preview-wrapper'] .md-editor-preview");
+		if (!calibrateCmEl || !previewContent) return;
+		wrap.addEventListener("click", onEditorClick);
+		previewContentRo = new ResizeObserver(() => {
+			if (calibrateTimer) clearTimeout(calibrateTimer);
+			calibrateTimer = setTimeout(() => {
+				dispatchCalibrate();
+				if (calibrateConfirmTimer) clearTimeout(calibrateConfirmTimer);
+				calibrateConfirmTimer = setTimeout(dispatchCalibrate, 500);
+			}, 200);
+		});
+		previewContentRo.observe(previewContent);
+	});
+
+	onBeforeUnmount(() => {
+		if (calibrateTimer) clearTimeout(calibrateTimer);
+		if (calibrateConfirmTimer) clearTimeout(calibrateConfirmTimer);
+		previewContentRo?.disconnect();
+	});
+
 	/** 就地编辑不显示分栏预览，预览/目录两个切换按钮一并隐藏；工具栏尾部挂自定义槽（数字 = defToolbars
-	 *  槽内第 N 个实际渲染的子组件）：AI 下拉（启用时索引 0）在先，分栏相关按钮（预览/目录、
-	 *  分栏编辑跳转）一律排在其右侧 */
+	 *  槽 children 数组下标，v-if 假值同样生成注释占位、占下标）：滚动联动开关（split，索引 0）排在
+	 *  AI 下拉（索引 1）之前，分栏编辑跳转（expandable，索引 2）殿后 */
 	const toolbars = computed<ToolbarNames[]>(() => {
 		const base: ToolbarNames[] = [
 			"bold",
@@ -110,9 +241,10 @@
 			"revoke",
 			"next",
 		];
-		if (aiOn.value) base.push("-", 0);
+		if (props.split) base.push("-", 0);
+		if (aiOn.value) base.push("-", 1);
 		if (props.split) base.push("-", "preview", "catalog");
-		if (props.expandable) base.push("-", aiOn.value ? 1 : 0);
+		if (props.expandable) base.push("-", 2);
 		return base;
 	});
 
@@ -809,7 +941,7 @@
 			<span v-if="lastAutoSavedAt" class="auto-save-hint">已自动保存 {{ lastAutoSavedAt }}</span>
 		</div>
 
-		<div class="editor-wrap">
+		<div ref="editorWrapEl" class="editor-wrap">
 			<!-- 注意：唯一标识必须用 editorId prop；若误用 :id 会作为透传 attr 覆盖根元素内部 id，
 				     组件内部 rebindEvent 按 #editorId 查 .cm-scroller 会落空，抛 null.addEventListener
 				     并打断 Vue post-flush（文章加载/弹窗全部失灵） -->
@@ -820,16 +952,31 @@
 				:toolbars="toolbars"
 				:footers="[]"
 				:preview="split"
+				:scroll-auto="scrollSync"
 				:theme="isDark ? 'dark' : 'light'"
 				:sanitize="editorSanitize"
 				placeholder="正文使用标准 Markdown 语法"
 				@on-upload-img="onUploadImg"
 			>
 				<!-- 自定义工具：overlay 渲染在编辑器 DOM 内，只放原生元素避免弹层冲突。
-				    数字槽位按槽 children 数组下标取：AI 下拉 0（aiOn 时）、分栏编辑跳转 1（expandable 时）。
-				    槽内严禁插入 HTML 注释等额外节点——它们占下标，会让数字取到注释而按钮不渲染；
-				    NormalToolbar 的显示内容只认 #trigger 子插槽，放默认插槽会渲染成空按钮 -->
+				    数字槽位按槽 children 数组下标取：滚动联动开关 0、AI 下拉 1、分栏编辑跳转 2
+				    （v-if 假值会生成注释占位、同样占下标，故三个位置恒定）。槽内严禁插入 HTML 注释等
+				    额外节点——它们占下标，会让数字取到注释而按钮不渲染；NormalToolbar 的显示内容
+				    只认 #trigger 子插槽，放默认插槽会渲染成空按钮 -->
 				<template #defToolbars>
+					<NormalToolbar
+						v-if="split"
+						:title="scrollSync ? '滚动联动：开（点击关闭，左右独立滚动）' : '滚动联动：关（点击开启，左右同步滚动）'"
+						@onClick="toggleScrollSync"
+					>
+						<template #trigger>
+							<Icon
+								icon="material-symbols:swap-vert"
+								class="split-toolbar-icon"
+								:class="{ 'is-on': scrollSync }"
+							/>
+						</template>
+					</NormalToolbar>
 					<DropdownToolbar
 						v-if="aiOn"
 						:visible="aiMenuVisible"
@@ -1020,6 +1167,23 @@
 				<el-button type="primary" :loading="saving" @click="save()">保存</el-button>
 			</template>
 		</el-drawer>
+
+		<!-- mermaid 单图查看器：全屏舞台，滚轮缩放（光标为锚）+ 拖拽平移 + 双击复位 -->
+		<el-dialog v-model="mmViewerVisible" fullscreen class="mm-viewer-dialog" append-to-body>
+			<template #header>
+				<span class="mm-viewer-title">流程图</span>
+				<span class="mm-viewer-hint">滚轮缩放 · 拖动平移 · 双击复位 · Esc 关闭</span>
+			</template>
+			<div
+				ref="mmStageEl"
+				class="mm-stage"
+				@wheel.prevent="onMmWheel"
+				@mousedown.prevent="onMmDragStart"
+				@dblclick="mmReset"
+			>
+				<div ref="mmInnerEl" class="mm-inner" :style="mmTransform" v-html="mmViewer?.svg" />
+			</div>
+		</el-dialog>
 
 		<!-- 全文改写类 AI 结果：IDEA 式左右 diff（行号槽 + 行级增删标记 + 折叠未变行），
 			     AI 生成期间即打开并流式刷新右列，完成后可逐处跳转变更 -->
@@ -1302,6 +1466,54 @@
 	.split-toolbar-icon {
 		font-size: 20px;
 	}
+	/* 滚动联动开启态：品牌色标识「已开启」；关闭态保持常规色（置灰会被误读成不可点击） */
+	.split-toolbar-icon.is-on {
+		color: var(--el-color-primary);
+	}
+	/* 预览内 mermaid：限宽自适应不裁剪（库默认 overflow:hidden 会裁掉宽图），
+	   缩放交互移入单图查看器，光标改放大镜 */
+	.editor-wrap :deep(.md-editor-mermaid[data-processed] svg) {
+		max-width: 100%;
+		height: auto;
+	}
+	.editor-wrap :deep(.md-editor-mermaid[data-processed]),
+	.editor-wrap :deep(.md-editor-mermaid[data-processed]:active) {
+		cursor: zoom-in;
+	}
+	/* mermaid 单图查看器（dialog 内部结构经 append-to-body 传送，无本组件 scoped 属性，
+	   相关规则见文件尾部的全局样式块） */
+	.mm-viewer-title {
+		font-weight: 600;
+	}
+	.mm-viewer-hint {
+		margin-left: 14px;
+		color: var(--el-text-color-secondary);
+		font-size: calc(16px + var(--font-shift, 0px));
+	}
+	.mm-stage {
+		position: relative;
+		height: 100%;
+		overflow: hidden;
+		background: var(--el-fill-color-light);
+		cursor: grab;
+	}
+	.mm-stage:active {
+		cursor: grabbing;
+	}
+	.mm-inner {
+		position: absolute;
+		top: 0;
+		left: 0;
+		transform-origin: top left;
+		line-height: 0;
+	}
+	.mm-inner :deep(svg) {
+		max-width: none;
+		height: auto;
+		background: var(--el-bg-color);
+		border-radius: 8px;
+		box-shadow: var(--el-box-shadow-light);
+	}
 	/* AI 工具栏触发器：图标 + 「AI」文字（区别于纯图标工具，一眼可辨） */
 	.ai-toolbar-trigger {
 		display: inline-flex;
@@ -1570,5 +1782,14 @@
 	}
 	.dot.ins {
 		background: rgb(103 194 58 / 30%);
+	}
+</style>
+
+<style>
+	/* mermaid 查看器 dialog（append-to-body 传送后不带组件 scoped 属性，须全局规则）：
+	   弹窗体占满除标题栏外的整屏，舞台才能拿到高度 */
+	.mm-viewer-dialog .el-dialog__body {
+		height: calc(100vh - 55px);
+		padding: 0;
 	}
 </style>

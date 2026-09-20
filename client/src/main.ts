@@ -9,6 +9,7 @@ import * as Icons from "@element-plus/icons-vue";
 import App from "./App.vue";
 import { router } from "./router";
 import "./utils/icons"; // 注册内置离线图标集合（须先于任何 DataIcon 渲染执行）
+import "./utils/md-editor-setup"; // 注入 mermaid 离线实例（编辑器/预览渲染共用）
 import "./styles.css";
 
 const app = createApp(App);
