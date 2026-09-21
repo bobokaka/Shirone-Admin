@@ -414,7 +414,6 @@
 					: `改写以下${desc.value.itemLabel}「${itemTitle}」的「${f.label}」，信息不变、表达更流畅，1-3 句中文，只输出改写结果。`;
 			// 流式回填：改写结果直接在字段里长出来；停止/失败恢复原值
 			const result = await aiConsole.run(
-				`AI改写·${f.label}`,
 				{
 					instruction,
 					text: current === "" ? itemTitle : current,
@@ -422,7 +421,10 @@
 				},
 				{ onText: (full) => (form.value[f.key] = full) },
 			);
-			if (result === null) form.value[f.key] = current;
+			if (result === null) {
+				form.value[f.key] = current;
+				aiConsole.reportOutcome();
+			}
 		} finally {
 			fieldAiKey.value = "";
 		}
@@ -810,16 +812,25 @@
 							:content="String(form[f.key] ?? '').trim() === '' ? 'AI生成' : 'AI改写'"
 							placement="top"
 						>
+							<!-- 运行中属主按钮转为「停止」：就地中断生成 -->
 							<el-button
+								v-if="fieldAiRunning && fieldAiKey === f.key"
 								class="ai-field-btn"
 								size="small"
-								:loading="fieldAiRunning && fieldAiKey === f.key"
+								type="danger"
+								plain
+								@click="aiConsole.stop()"
+							>
+								停止
+							</el-button>
+							<el-button
+								v-else
+								class="ai-field-btn"
+								size="small"
 								:disabled="fieldAiRunning"
 								@click="runFieldAi(f)"
 							>
-								<el-icon v-if="!(fieldAiRunning && fieldAiKey === f.key)">
-									<Icon icon="material-symbols:auto-awesome" />
-								</el-icon>AI
+								<el-icon><Icon icon="material-symbols:auto-awesome" /></el-icon>AI
 							</el-button>
 						</el-tooltip>
 					</div>

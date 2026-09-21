@@ -234,7 +234,7 @@
 	/* ---------- AI 辅助（润色正文 / 建议标签与心情；AI 未启用时不出现）---------- */
 
 	const aiEnabled = ref(false);
-	/** 润色走全局流式控制台（思考可见、可随时停止）；标签建议是快速 JSON 任务，仍走一次性接口 */
+	/** 润色流式回填到输入框（运行中按钮转为「停止」就地中断）；标签建议是快速 JSON 任务，仍走一次性接口 */
 	const aiConsole = useAiConsoleStore();
 	const polishing = computed(() => aiConsole.running);
 	const suggesting = ref(false);
@@ -248,7 +248,6 @@
 		// 流式回填：润色结果直接在输入框里长出来；停止/失败恢复原文
 		const original = text.value;
 		const result = await aiConsole.run(
-			"AI润色说说",
 			{
 				instruction: "润色这条说说：口语化自然、保留语气与事实，只输出结果",
 				text: original,
@@ -256,7 +255,10 @@
 			},
 			{ onText: (full) => (text.value = full) },
 		);
-		text.value = result ?? original;
+		if (result === null) {
+			text.value = original;
+			aiConsole.reportOutcome();
+		} else text.value = result;
 	}
 
 	/** AI 从正文提取标签（合并去重）+ 猜测心情（按中文词映射 MOODS 图标，已有值不覆盖） */
@@ -407,10 +409,13 @@
 			<div class="composer-actions">
 				<el-tooltip
 					v-if="aiEnabled"
-					content="AI 润色：口语化自然、保留语气与事实（流式生成，可随时停止）"
+					:content="polishing ? '停止生成并恢复原文' : 'AI 润色：口语化自然、保留语气与事实（流式生成，可随时停止）'"
 					placement="top"
 				>
-					<el-button :disabled="polishing" @click="polishText">
+					<el-button v-if="polishing" type="danger" plain @click="aiConsole.stop()">
+						<el-icon class="is-loading"><Loading /></el-icon>停止
+					</el-button>
+					<el-button v-else @click="polishText">
 						<el-icon><Icon icon="material-symbols:autoawesome" /></el-icon>AI润色
 					</el-button>
 				</el-tooltip>

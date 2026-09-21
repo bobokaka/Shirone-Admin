@@ -7,7 +7,7 @@
 	import type { AiSettings, PostFile, PostMeta } from "@shirone-admin/shared";
 	import { aiApi, mediaApi, postApi } from "../api";
 	import { useTheme } from "../composables/useTheme";
-	import { useAiConsoleStore } from "../stores/aiConsole";
+	import { useAiConsoleStore, type AiResultIteration } from "../stores/aiConsole";
 	import { localMediaSanitize, previewUrlOf } from "../utils/content-media";
 	import { sideBySideDiff, type DiffRow } from "../utils/diff";
 
@@ -442,7 +442,7 @@
 		aiPreview.value = { title, original, result: "", streaming: true, stopped: false };
 		let live = "";
 		let flushTimer: ReturnType<typeof setTimeout> | null = null;
-		const result = await aiConsole.run(`AI${title}`, { instruction, postPath: props.path, maxTokens }, {
+		const result = await aiConsole.run({ instruction, postPath: props.path, maxTokens }, {
 			onText: (full) => {
 				live = full;
 				if (!flushTimer) {
@@ -459,14 +459,90 @@
 		if (result !== null) {
 			aiPreview.value = { title, original, result, streaming: false, stopped: false };
 			jumpFirstChange();
+			// 会话里已持有全文：注册迭代挂钩，之后弹窗底部的「继续调整」直接流式更新右列（基线仍是这份原文）
+			aiConsole.attachIteration(aiIteration);
 			return;
 		}
 		if (live.trim() !== "" && aiConsole.lastOutcome === "stopped") {
 			aiPreview.value = { title, original, result: live, streaming: false, stopped: true };
 			return;
 		}
-		// 失败/停止但无产出：错误已在控制台展示，弹窗无内容可看
+		// 失败/停止但无产出：轻提示错误，弹窗无内容可看
+		aiConsole.reportOutcome();
 		aiPreview.value = null;
+	}
+
+	/* ---------- 结果弹窗迭代：任务成功后底部追问不再输出聊天文本，而是流式更新弹窗右列 ----------
+	   diff 基线固定为最初原文（累计展示所有轮改动）；中途停止保留部分产出供查看，失败回退上一版完整结果 */
+	let iterLive = "";
+	let iterFlushTimer: ReturnType<typeof setTimeout> | null = null;
+	function clearIterFlush(): void {
+		if (iterFlushTimer) {
+			clearTimeout(iterFlushTimer);
+			iterFlushTimer = null;
+		}
+	}
+	const aiIteration: AiResultIteration = {
+		onStart() {
+			if (!aiPreview.value) return;
+			iterLive = "";
+			expandedFolds.value = new Set();
+			currentChange.value = 0;
+			// 先保留上一版结果占着右列（思考可能要等十几秒），首个增量到达再整体替换
+			aiPreview.value = { ...aiPreview.value, streaming: true, stopped: false };
+		},
+		onText(full) {
+			if (!aiPreview.value) return;
+			iterLive = full;
+			if (!iterFlushTimer) {
+				iterFlushTimer = setTimeout(() => {
+					iterFlushTimer = null;
+					if (aiPreview.value?.streaming) aiPreview.value.result = iterLive;
+				}, 200);
+			}
+		},
+		onDone(full) {
+			clearIterFlush();
+			if (!aiPreview.value) return;
+			aiPreview.value = { ...aiPreview.value, result: full, streaming: false, stopped: false };
+			jumpFirstChange();
+		},
+		onEnd(outcome) {
+			clearIterFlush();
+			if (!aiPreview.value) return;
+			if (outcome === "stopped" && iterLive.trim() !== "") {
+				aiPreview.value = { ...aiPreview.value, result: iterLive, streaming: false, stopped: true };
+				return;
+			}
+			// 失败/停止且无产出：回到上一版完整结果
+			aiPreview.value = { ...aiPreview.value, streaming: false };
+		},
+	};
+	// 弹窗关闭（应用/放弃/失败清空）即摘除：底部输入框随之隐藏
+	watch(aiPreviewVisible, (open) => {
+		if (!open) aiConsole.detachIteration(aiIteration);
+	});
+
+	/* ---------- 弹窗内聚的运行状态与继续调整输入（原 AI 控制台职责就在这里落地） ---------- */
+	const aiThinkingOpen = ref(false);
+	watch(
+		() => aiConsole.running,
+		(r) => {
+			if (r) aiThinkingOpen.value = false;
+		},
+	);
+	const aiIterDraft = ref("");
+	function onIterEnter(e: KeyboardEvent): void {
+		// 中文输入法组词确认的 Enter 不触发发送
+		if (e.isComposing) return;
+		e.preventDefault();
+		void sendIteration();
+	}
+	async function sendIteration(): Promise<void> {
+		const q = aiIterDraft.value.trim();
+		if (q === "" || aiConsole.running) return;
+		aiIterDraft.value = "";
+		await aiConsole.send(q);
 	}
 
 	async function runAiAction(id: AiAction): Promise<void> {
@@ -496,7 +572,7 @@
 
 		if (id === "polish") {
 			if (selected !== "" && range) {
-				result = await aiConsole.run("AI润色（选中）", {
+				result = await aiConsole.run({
 					instruction:
 						"润色用户选中的文字片段（用 read_selection 读取）：表达更流畅自然、生动易读，抽象表述改为通俗说法并精确点明核心意义，保留原意与技术准确性，只输出润色结果。",
 					postPath: props.path,
@@ -507,7 +583,7 @@
 				if (result !== null) {
 					replaceRange(range.start, range.end, result);
 					ElMessage.success("已替换选中内容");
-				}
+				} else aiConsole.reportOutcome();
 			} else {
 				await runPreviewAction(
 					"润色",
@@ -519,7 +595,7 @@
 		}
 
 		if (id === "continue") {
-			result = await aiConsole.run("AI续写", {
+			result = await aiConsole.run({
 				instruction:
 					"续写这篇目标文章：先读原文（结尾部分必读），从当前结尾自然延续，保持语气、人称与 Markdown 格式一致，延续正文的标题编号体系（1、1.1、1.1.1 式）与生动易读的风格（短段、列表、关键处加粗，忌大段堆砌文字），只输出续写的新内容，不要重复已有内容。",
 				postPath: props.path,
@@ -528,7 +604,7 @@
 			if (result !== null) {
 				body.value = `${body.value.replace(/\s+$/, "")}\n\n${result}\n`;
 				ElMessage.success("已追加到文末");
-			}
+			} else aiConsole.reportOutcome();
 			return;
 		}
 
@@ -536,7 +612,7 @@
 		const instruction = aiCustomInstruction.value.trim();
 		if (instruction === "") return;
 		if (selected !== "" && range) {
-			result = await aiConsole.run("AI自定义指令（选中）", {
+			result = await aiConsole.run({
 				instruction: `${instruction}（作用于用户选中的文字片段，用 read_selection 读取原文，只输出处理结果）`,
 				postPath: props.path,
 				selectionStart: range.start,
@@ -547,7 +623,7 @@
 				replaceRange(range.start, range.end, result);
 				ElMessage.success("已替换选中内容");
 				aiCustomInstruction.value = "";
-			}
+			} else aiConsole.reportOutcome();
 		} else {
 			await runPreviewAction("自定义指令", instruction, 16384);
 			if (aiConsole.lastOutcome === "done") aiCustomInstruction.value = "";
@@ -571,34 +647,24 @@
 		}
 	}
 
-	/** 抽屉内静默生成（不弹 AI 面板）：标签/摘要按钮的 loading 态 */
+	/** 抽屉内生成：标签/摘要按钮的 loading 态（结果回填表单，不弹窗） */
 	const drawerAiBusy = ref<"tags" | "summary" | null>(null);
 
-	/** 静默任务失败/停止的轻提示（面板未弹出，详情在 AI 助手里查看） */
-	function notifySilentFailure(): void {
-		if (aiConsole.lastOutcome === "error") ElMessage.error("AI 生成失败，可打开 AI 助手查看详情");
-		else if (aiConsole.lastOutcome === "stopped") ElMessage.info("已停止生成");
-	}
-
-	/** AI 生成摘要回填文章信息（编辑器工具栏与信息抽屉共用）；静默执行不弹 AI 面板，返回是否成功回填 */
+	/** AI 生成摘要回填文章信息（编辑器工具栏与信息抽屉共用），返回是否成功回填 */
 	async function aiGenerateSummary(): Promise<boolean> {
 		if (!checkAiBody()) return false;
 		// 服务端从磁盘读文：先静默落盘
 		if (!(await autoSaveIfDirty())) return false;
 		drawerAiBusy.value = "summary";
 		try {
-			const result = await aiConsole.run(
-				"AI生成摘要",
-				{
-					instruction:
-						"为这篇目标文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
-					postPath: props.path,
-					maxTokens: 1024,
-				},
-				{ silent: true },
-			);
+			const result = await aiConsole.run({
+				instruction:
+					"为这篇目标文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
+				postPath: props.path,
+				maxTokens: 1024,
+			});
 			if (result === null) {
-				notifySilentFailure();
+				aiConsole.reportOutcome();
 				return false;
 			}
 			if (description.value.trim() !== "") {
@@ -620,7 +686,7 @@
 		}
 	}
 
-	/** AI 生成标签回填文章信息：静默执行不弹 AI 面板；先匹配全站现有标签，不足以概括时才新增；已有标签需确认覆盖 */
+	/** AI 生成标签回填文章信息；先匹配全站现有标签，不足以概括时才新增；已有标签需确认覆盖 */
 	async function aiGenerateTags(): Promise<void> {
 		if (!checkAiBody()) return;
 		// 服务端从磁盘读文：先静默落盘
@@ -632,17 +698,13 @@
 				: "全站暂无标签，直接新建。";
 		drawerAiBusy.value = "tags";
 		try {
-			const result = await aiConsole.run(
-				"AI生成标签",
-				{
-					instruction: `为这篇目标文章（原文自行读取）生成 3-6 个标签。${poolNote}中文为主，通用技术名词可用英文（如 TypeScript）。只输出标签本身，用逗号分隔，不要编号、引号或解释。`,
-					postPath: props.path,
-					maxTokens: 512,
-				},
-				{ silent: true },
-			);
+			const result = await aiConsole.run({
+				instruction: `为这篇目标文章（原文自行读取）生成 3-6 个标签。${poolNote}中文为主，通用技术名词可用英文（如 TypeScript）。只输出标签本身，用逗号分隔，不要编号、引号或解释。`,
+				postPath: props.path,
+				maxTokens: 512,
+			});
 			if (result === null) {
-				notifySilentFailure();
+				aiConsole.reportOutcome();
 				return;
 			}
 			const parsed = [
@@ -992,6 +1054,9 @@
 						</template>
 						<template #overlay>
 							<div ref="aiMenuEl" class="ai-toolbar-menu">
+								<button v-if="aiRunning" type="button" class="stop-gen" @click="aiConsole.stop()">
+									<el-icon><Icon icon="material-symbols:stop-circle" /></el-icon>停止生成
+								</button>
 								<button
 									v-for="a in AI_ACTIONS"
 									:key="a.id"
@@ -1195,7 +1260,21 @@
 			class="ai-preview-dialog"
 		>
 			<div class="ai-preview-status">
-				<el-tag v-if="aiPreview?.streaming" size="small" effect="plain">AI 生成中…</el-tag>
+				<template v-if="aiConsole.running">
+					<el-tag size="small" effect="plain">
+						生成中 · {{ Math.floor(aiConsole.elapsedMs / 1000) }} 秒
+					</el-tag>
+					<el-button
+						v-if="aiConsole.thinking"
+						size="small"
+						text
+						class="think-toggle"
+						@click="aiThinkingOpen = !aiThinkingOpen"
+					>
+						{{ aiThinkingOpen ? "▾" : "▸" }} 思考过程
+					</el-button>
+					<el-button size="small" type="danger" plain @click="aiConsole.stop()">停止</el-button>
+				</template>
 				<el-tag v-else-if="aiPreview?.stopped" size="small" type="warning" effect="plain">
 					已停止（内容不完整，不能应用）
 				</el-tag>
@@ -1221,6 +1300,7 @@
 					<el-icon><ArrowDown /></el-icon>下一处
 				</el-button>
 			</div>
+			<pre v-if="aiConsole.running && aiThinkingOpen && aiConsole.thinking" class="ai-think-body">{{ aiConsole.thinking }}</pre>
 			<div class="diff-wrap">
 				<div class="diff-head">
 					<span class="diff-head-cell">原文</span>
@@ -1279,6 +1359,22 @@
 						<span class="seg del">行内删除</span><span class="seg ins">行内新增</span>
 					</span>
 				</div>
+			</div>
+			<!-- 继续调整：续任务会话追问，新全文流式更新上方右列（diff 基线仍是原文） -->
+			<div v-if="!aiPreview?.streaming && !aiPreview?.stopped && aiConsole.iterating" class="ai-iter-bar">
+				<el-input
+					v-model="aiIterDraft"
+					placeholder="继续调整：如「把 1.2 节再精简些」（Enter 发送，新结果实时更新到上方 diff）"
+					:disabled="aiConsole.running"
+					@keydown.enter="onIterEnter"
+				/>
+				<el-button
+					type="primary"
+					:disabled="aiConsole.running || aiIterDraft.trim() === ''"
+					@click="sendIteration"
+				>
+					发送
+				</el-button>
 			</div>
 			<template #footer>
 				<el-button :disabled="aiPreview?.streaming || !aiPreview?.result" @click="copyAiResult">
@@ -1563,6 +1659,13 @@
 		opacity: 0.5;
 		cursor: not-allowed;
 	}
+	/* 运行中的停止项：红色文字与菜单常规项区分 */
+	.ai-toolbar-menu button.stop-gen {
+		color: var(--el-color-danger);
+	}
+	.ai-toolbar-menu button.stop-gen:hover {
+		background: var(--el-color-danger-light-9);
+	}
 	.ai-toolbar-custom {
 		display: flex;
 		align-items: center;
@@ -1612,6 +1715,30 @@
 	.diff-count {
 		font-size: calc(16px + var(--font-shift, 0px));
 		color: var(--el-text-color-secondary);
+	}
+	/* 思考过程展开区（运行中就地查看模型在干什么） */
+	.ai-think-body {
+		margin: 0 0 8px;
+		max-height: 180px;
+		overflow: auto;
+		border-left: 2px solid var(--el-border-color-lighter);
+		padding-left: 10px;
+		font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+		font-size: calc(20px + var(--font-shift, 0px));
+		line-height: 1.7;
+		color: var(--el-text-color-secondary);
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	/* 继续调整输入行：追问新全文流式更新上方 diff */
+	.ai-iter-bar {
+		display: flex;
+		gap: 10px;
+		align-items: center;
+		margin-top: 10px;
+	}
+	.ai-iter-bar .el-input {
+		flex: 1;
 	}
 	.diff-nav-spacer {
 		flex: 1;
