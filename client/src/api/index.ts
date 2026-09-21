@@ -81,6 +81,8 @@ export const postApi = {
 		clearPassword?: boolean;
 	}) => api.put<PostFile>("/api/posts", input),
 	remove: (path: string) => api.del<{ ok: boolean }>(`/api/posts?path=${encodeURIComponent(path)}`),
+	/** 保存列表手动排序（管理端本地偏好，服务端存 server/data，不落内容仓） */
+	saveOrder: (order: string[]) => api.put<{ ok: boolean }>("/api/posts/order", { order }),
 	/** 批量操作：一律改为目标状态（发布/取消发布/置顶/取消置顶/删除） */
 	batch: (action: BatchPostAction, paths: string[]) =>
 		api.post<BatchPostResult>("/api/posts/batch", { action, paths }),

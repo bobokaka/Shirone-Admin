@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { SavePostInput } from "@shirone-admin/shared";
 import * as storage from "../adapters/storage.js";
 import { sanitizeUserSlug, suggestSlug } from "../lib/slug.js";
+import { applySavedOrder, loadPostOrder, savePostOrder } from "../services/postOrder.js";
 
 const createSchema = z.object({
 	title: z.string().min(1, "标题不能为空"),
@@ -24,8 +25,22 @@ const batchSchema = z.object({
 	paths: z.array(z.string().min(1)).min(1, "未选择文章"),
 });
 
+const orderPutSchema = z.object({
+	order: z.array(z.string().min(1)).max(10_000),
+});
+
 export async function postRoutes(app: FastifyInstance): Promise<void> {
-	app.get("/api/posts", async () => storage.listPosts());
+	// 列表套用管理端本地的手动排序（server/data/post-order.json，不落内容仓）
+	app.get("/api/posts", async () => {
+		const [list, order] = await Promise.all([storage.listPosts(), loadPostOrder()]);
+		return applySavedOrder(list, order);
+	});
+
+	app.put("/api/posts/order", async (req) => {
+		const { order } = orderPutSchema.parse(req.body);
+		await savePostOrder([...new Set(order)]);
+		return { ok: true };
+	});
 
 	app.get("/api/posts/detail", async (req) => {
 		return storage.readPost(pathQuery.parse(req.query).path);

@@ -106,10 +106,10 @@
 	}
 
 	/** 来源拖拽（原生 HTML5）：dataTransfer 携带双 MIME —— 导航 MIME 供树内插入链接，
-	 *  文章 MIME 供分类节点接收改分类（同一拖拽按落点类型分派不同接口） */
+	 *  文章 MIME 供分类节点接收改分类或列表内排序（同一拖拽按落点类型分派不同接口） */
 	function postDragStart(p: PostMeta, e: DragEvent): void {
 		if (!e.dataTransfer) return;
-		e.dataTransfer.effectAllowed = "copy";
+		e.dataTransfer.effectAllowed = "copyMove";
 		e.dataTransfer.setData(
 			NAV_DROP_MIME,
 			JSON.stringify({ name: p.title, url: p.permalink || `/posts/${p.slug}/` }),
@@ -474,6 +474,75 @@
 		});
 	});
 
+	/* ---------- 列表内拖动排序（原生 DnD，与拖入导航共用同一拖拽源） ---------- */
+
+	const listEl = ref<HTMLElement | null>(null);
+	/** 拖动插入点在当前筛选视图中的序号（null = 不显示指示线） */
+	const dropIndex = ref<number | null>(null);
+
+	/** 视图插入序号：指针在某行中点上方即插到该行之前，末行之后返回 length */
+	function insertionIndexAt(y: number): number {
+		const rows = listEl.value ? [...listEl.value.querySelectorAll<HTMLElement>(":scope > .post-item")] : [];
+		for (let i = 0; i < rows.length; i += 1) {
+			const r = rows[i].getBoundingClientRect();
+			if (y < r.top + r.height / 2) return i;
+		}
+		return rows.length;
+	}
+
+	/** 拖经本列表：允许放置并亮指示线（仅认自家文章 MIME，导航树拖入不在此响应） */
+	function onListDragOver(e: DragEvent): void {
+		if (!e.dataTransfer?.types.includes(POST_DROP_MIME)) return;
+		e.preventDefault();
+		e.dataTransfer.dropEffect = "move";
+		dropIndex.value = insertionIndexAt(e.clientY);
+	}
+
+	/** 拖出列表（relatedTarget 已不在列表内）时熄线；移入子元素不算离开 */
+	function onListDragLeave(e: DragEvent): void {
+		const to = e.relatedTarget as Node | null;
+		if (to && listEl.value?.contains(to)) return;
+		dropIndex.value = null;
+	}
+
+	function onListDrop(e: DragEvent): void {
+		const raw = e.dataTransfer?.getData(POST_DROP_MIME);
+		dropIndex.value = null;
+		if (!raw) return;
+		let item: { path: string };
+		try {
+			item = JSON.parse(raw) as { path: string };
+		} catch {
+			return;
+		}
+		reorderInView(item.path, insertionIndexAt(e.clientY));
+	}
+
+	/** 视图内重排并回填主序列：视图命中的文章在主序列占据固定槽位，重排只改
+	 *  这些槽位上的相对顺序（筛选态下拖动不动其他分类文章的位置），随后整表落盘 */
+	function reorderInView(postPath: string, viewIndex: number): void {
+		const view = filtered.value;
+		const from = view.findIndex((p) => p.path === postPath);
+		if (from < 0) return;
+		const to = Math.max(0, Math.min(viewIndex, view.length));
+		if (to === from || to === from + 1) return; // 原位释放
+		const seq = view.filter((p) => p.path !== postPath);
+		seq.splice(to > from ? to - 1 : to, 0, view[from]);
+		const hit = new Set(seq.map((p) => p.path));
+		let k = 0;
+		posts.value = posts.value.map((p) => (hit.has(p.path) ? seq[k++] : p));
+		void persistOrder();
+	}
+
+	/** 顺序落盘（管理端本地 server/data/post-order.json；失败只提示，不回滚视图） */
+	async function persistOrder(): Promise<void> {
+		try {
+			await postApi.saveOrder(posts.value.map((p) => p.path));
+		} catch (e) {
+			ElMessage.error(`列表顺序保存失败：${(e as Error).message}`);
+		}
+	}
+
 	/** 列表行时间：publishedAt 精确到秒，缺省退回文件修改时间，最后退回 published 日期 */
 	function itemTime(p: PostMeta): string {
 		if (p.publishedAt) return p.publishedAt.replace("T", " ").replace(/\+\d{2}:\d{2}$/, "");
@@ -510,11 +579,12 @@
 		}
 	}
 
-	/** 新建：不问标题，直接建「未命名」草稿，列表底部追加一条并就地进入空白编辑 */
+	/** 新建：不问标题，直接建「未命名」草稿，列表顶部追加一条并就地进入空白编辑
+	 *  （未入手动排序的新文章一律排最前，与服务端归并规则一致） */
 	async function openCreate(): Promise<void> {
 		try {
 			const created = await postApi.create({ title: "未命名" });
-			posts.value.push(created.meta);
+			posts.value.unshift(created.meta);
 			await select(created.meta);
 			mode.value = "edit";
 		} catch (e) {
@@ -687,16 +757,29 @@
 								</el-select>
 							</div>
 						</template>
-						<div class="list-scroll" :class="{ 'batch-active': checkedPaths.size > 0 }">
+						<div
+							ref="listEl"
+							class="list-scroll"
+							:class="{ 'batch-active': checkedPaths.size > 0 }"
+							@dragover="onListDragOver"
+							@dragleave="onListDragLeave"
+							@drop="onListDrop"
+						>
 							<div v-if="filtered.length === 0" class="list-empty">没有符合条件的文章</div>
 							<div
-								v-for="p in filtered"
+								v-for="(p, i) in filtered"
 								:key="p.path"
 								class="post-item"
-								:class="{ active: p.path === selected?.path }"
+								:class="{
+									active: p.path === selected?.path,
+									'drop-before': dropIndex === i,
+									'drop-after': dropIndex === filtered.length && i === filtered.length - 1,
+								}"
 								draggable="true"
+								:title="'拖动可在列表内排序，或拖入左侧导航菜单'"
 								@click="select(p)"
 								@dragstart="postDragStart(p, $event)"
+								@dragend="dropIndex = null"
 							>
 								<el-checkbox
 									class="post-item-check"
@@ -1046,6 +1129,13 @@
 	.post-item.active {
 		border-color: var(--el-color-primary);
 		background: var(--el-color-primary-light-9);
+	}
+	/* 拖动排序指示线：box-shadow 不占布局，卡位不跳动；before = 插到该卡之前，after = 追加末尾 */
+	.post-item.drop-before {
+		box-shadow: 0 -3px 0 0 var(--el-color-primary);
+	}
+	.post-item.drop-after {
+		box-shadow: 0 3px 0 0 var(--el-color-primary);
 	}
 	.post-item-title-row {
 		display: flex;
