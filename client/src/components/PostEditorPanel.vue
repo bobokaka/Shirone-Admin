@@ -440,6 +440,7 @@
 		expandedFolds.value = new Set();
 		currentChange.value = 0;
 		aiPreview.value = { title, original, result: "", streaming: true, stopped: false };
+		aiStreamOut.value = "";
 		let live = "";
 		let flushTimer: ReturnType<typeof setTimeout> | null = null;
 		const result = await aiConsole.run({ instruction, postPath: props.path, maxTokens }, {
@@ -448,6 +449,7 @@
 				if (!flushTimer) {
 					flushTimer = setTimeout(() => {
 						flushTimer = null;
+						aiStreamOut.value = live;
 						if (aiPreview.value) aiPreview.value.result = live;
 					}, 200);
 				}
@@ -457,13 +459,15 @@
 		// 流式期间用户已放弃/关闭弹窗（aiPreview 被清空）：不再重新打开
 		if (aiPreview.value === null) return;
 		if (result !== null) {
+			aiStreamOut.value = result;
 			aiPreview.value = { title, original, result, streaming: false, stopped: false };
 			jumpFirstChange();
-			// 会话里已持有全文：注册迭代挂钩，之后弹窗底部的「继续调整」直接流式更新右列（基线仍是这份原文）
+			// 会话里已持有全文：注册迭代挂钩，之后弹窗左侧的「继续调整」直接流式更新右列（基线仍是这份原文）
 			aiConsole.attachIteration(aiIteration);
 			return;
 		}
 		if (live.trim() !== "" && aiConsole.lastOutcome === "stopped") {
+			aiStreamOut.value = live;
 			aiPreview.value = { title, original, result: live, streaming: false, stopped: true };
 			return;
 		}
@@ -488,7 +492,8 @@
 			iterLive = "";
 			expandedFolds.value = new Set();
 			currentChange.value = 0;
-			// 先保留上一版结果占着右列（思考可能要等十几秒），首个增量到达再整体替换
+			// 左侧输出切回本轮（清空重填）；右侧 diff 先保留上一版结果占位，首个增量到达再整体替换
+			aiStreamOut.value = "";
 			aiPreview.value = { ...aiPreview.value, streaming: true, stopped: false };
 		},
 		onText(full) {
@@ -497,6 +502,7 @@
 			if (!iterFlushTimer) {
 				iterFlushTimer = setTimeout(() => {
 					iterFlushTimer = null;
+					aiStreamOut.value = iterLive;
 					if (aiPreview.value?.streaming) aiPreview.value.result = iterLive;
 				}, 200);
 			}
@@ -504,6 +510,7 @@
 		onDone(full) {
 			clearIterFlush();
 			if (!aiPreview.value) return;
+			aiStreamOut.value = full;
 			aiPreview.value = { ...aiPreview.value, result: full, streaming: false, stopped: false };
 			jumpFirstChange();
 		},
@@ -511,10 +518,12 @@
 			clearIterFlush();
 			if (!aiPreview.value) return;
 			if (outcome === "stopped" && iterLive.trim() !== "") {
+				aiStreamOut.value = iterLive;
 				aiPreview.value = { ...aiPreview.value, result: iterLive, streaming: false, stopped: true };
 				return;
 			}
 			// 失败/停止且无产出：回到上一版完整结果
+			aiStreamOut.value = aiPreview.value.result;
 			aiPreview.value = { ...aiPreview.value, streaming: false };
 		},
 	};
@@ -524,14 +533,42 @@
 	});
 
 	/* ---------- 弹窗内聚的运行状态与继续调整输入（原 AI 控制台职责就在这里落地） ---------- */
-	const aiThinkingOpen = ref(false);
+	/** 本轮输出全文（左侧展示）：任务/每轮迭代开始时清空，随流式增量填充；右侧 diff 在有产出前不摆空白对比 */
+	const aiStreamOut = ref("");
+	const aiThinkingOpen = ref(true);
 	watch(
 		() => aiConsole.running,
 		(r) => {
-			if (r) aiThinkingOpen.value = false;
+			// 新一轮开始自动展开思考并恢复跟随滚动；结束后保持用户自己的展开/收起与滚动位置
+			if (r) {
+				aiThinkingOpen.value = true;
+				aiSidePinned.value = true;
+			}
 		},
 	);
 	const aiIterDraft = ref("");
+	/** 本轮输出展示文案：有正文显示正文；思考已在流（模型明显工作中）就不摆「等待」占位，避免误导读数 */
+	const aiOutDisplay = computed(() => {
+		if (aiStreamOut.value !== "") return aiStreamOut.value;
+		if (aiConsole.running) return aiConsole.thinking === "" ? "等待模型输出…" : "";
+		return "（本轮无文本输出）";
+	});
+	/** 运行中左栏跟随输出滚到底——仅当用户本来就停在底部；往上翻阅即停跟，避免拉扯抖动 */
+	const aiSideScrollEl = ref<HTMLElement>();
+	const aiSidePinned = ref(true);
+	function onSideScroll(): void {
+		const el = aiSideScrollEl.value;
+		if (el) aiSidePinned.value = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+	}
+	watch(
+		() => `${aiConsole.thinking.length}:${aiStreamOut.value.length}`,
+		() => {
+			if (!aiConsole.running || !aiSidePinned.value) return;
+			void nextTick(() => {
+				if (aiSideScrollEl.value) aiSideScrollEl.value.scrollTop = aiSideScrollEl.value.scrollHeight;
+			});
+		},
+	);
 	function onIterEnter(e: KeyboardEvent): void {
 		// 中文输入法组词确认的 Enter 不触发发送
 		if (e.isComposing) return;
@@ -565,7 +602,7 @@
 			const isImprove = id === "improve";
 			const instruction = isImprove
 				? "完善这篇 Markdown 文章：补全论述缺口、增强逻辑衔接与技术细节的准确性。表达生动、易读、易懂、有传播力：抽象概念用通俗类比讲清并精确点明核心意义，杜绝大段堆砌文字——长段落拆成短段、列表或表格，关键结论加粗，适合的流程或关系用 mermaid 图（```mermaid 代码围栏）呈现。标题层级统一用 1、1.1、1.1.1 式编号（如 ## 1. 标题、### 1.1 标题），层级与编号严格对应。保留原有观点、语气、代码、图片引用与私有扩展语法（三冒号容器、file-tree 等原样保留）。输出完善后的完整正文。"
-				: "优化这篇 Markdown 文章的格式，不改动内容表述：标题层级统一为 1、1.1、1.1.1 式编号（如 ## 1. 标题、### 1.1 标题），层级与编号严格对应；大段文字拆分为短段、列表或表格，关键信息加粗突出；规范列表与引用格式、统一中英文标点与空格、补全代码围栏语言标注、修正排版问题。输出完整正文。";
+				: "优化这篇 Markdown 文章的格式，不改动内容表述：标题层级以内容的实际逻辑结构为准重新判定并纠错——现有标题层级不可信（层级跳跃、错挂、二级内容顶着一级标题等），不要沿用现有层级，先读懂内容再按语义归属重排；统一为 1、1.1、1.1.1 式编号（如 ## 1. 标题、### 1.1 标题），层级与编号严格对应；大段文字拆分为短段、列表或表格，关键信息加粗突出；规范列表与引用格式、统一中英文标点与空格、补全代码围栏语言标注、修正排版问题。输出完整正文。";
 			await runPreviewAction(isImprove ? "完善内容" : "格式优化", instruction, 16384);
 			return;
 		}
@@ -1250,58 +1287,95 @@
 			</div>
 		</el-dialog>
 
-		<!-- 全文改写类 AI 结果：IDEA 式左右 diff（行号槽 + 行级增删标记 + 折叠未变行），
-			     AI 生成期间即打开并流式刷新右列，完成后可逐处跳转变更 -->
+		<!-- 全文改写类 AI 结果：左栏交互输出（状态/思考/本轮输出/继续调整），右栏新旧对比 diff；
+			     生成初期（尚无产出）右栏不摆空白对比，出结果后流式刷新、完成可逐处跳转变更 -->
 		<el-dialog
 			v-model="aiPreviewVisible"
 			:title="`AI 结果 — ${aiPreview?.title ?? ''}`"
-			width="min(1200px, 96%)"
+			width="min(1400px, 96%)"
 			top="4vh"
 			class="ai-preview-dialog"
 		>
-			<div class="ai-preview-status">
-				<template v-if="aiConsole.running">
-					<el-tag size="small" effect="plain">
-						生成中 · {{ Math.floor(aiConsole.elapsedMs / 1000) }} 秒
-					</el-tag>
-					<el-button
-						v-if="aiConsole.thinking"
-						size="small"
-						text
-						class="think-toggle"
-						@click="aiThinkingOpen = !aiThinkingOpen"
-					>
-						{{ aiThinkingOpen ? "▾" : "▸" }} 思考过程
-					</el-button>
-					<el-button size="small" type="danger" plain @click="aiConsole.stop()">停止</el-button>
-				</template>
-				<el-tag v-else-if="aiPreview?.stopped" size="small" type="warning" effect="plain">
-					已停止（内容不完整，不能应用）
-				</el-tag>
-				<el-tag v-else-if="aiLengthWarn" size="small" type="danger" effect="plain">
-					长度 {{ body.length }} → {{ aiPreview?.result.length ?? 0 }} 字符，变化较大请核对
-				</el-tag>
-				<span class="diff-count">共 {{ changeBlocks.length }} 处变更</span>
-				<span class="diff-nav-spacer" />
-				<el-button
-					size="small"
-					text
-					:disabled="changeBlocks.length === 0"
-					@click="gotoChange(-1)"
-				>
-					<el-icon><ArrowUp /></el-icon>上一处
-				</el-button>
-				<el-button
-					size="small"
-					text
-					:disabled="changeBlocks.length === 0"
-					@click="gotoChange(1)"
-				>
-					<el-icon><ArrowDown /></el-icon>下一处
-				</el-button>
-			</div>
-			<pre v-if="aiConsole.running && aiThinkingOpen && aiConsole.thinking" class="ai-think-body">{{ aiConsole.thinking }}</pre>
-			<div class="diff-wrap">
+			<div class="ai-preview-layout">
+				<aside class="ai-side">
+					<div class="ai-side-status">
+						<template v-if="aiConsole.running">
+							<el-tag size="small" effect="plain">
+								生成中 · {{ Math.floor(aiConsole.elapsedMs / 1000) }} 秒
+							</el-tag>
+							<span class="side-spacer" />
+							<el-button size="small" type="danger" plain @click="aiConsole.stop()">停止</el-button>
+						</template>
+						<template v-else>
+							<el-tag v-if="aiPreview?.stopped" size="small" type="warning" effect="plain">已停止</el-tag>
+							<el-tag v-else size="small" type="success" effect="plain">
+								已完成 · {{ Math.floor(aiConsole.elapsedMs / 1000) }} 秒
+							</el-tag>
+						</template>
+					</div>
+					<div ref="aiSideScrollEl" class="ai-side-scroll" @scroll="onSideScroll">
+						<section v-if="aiConsole.thinking" class="ai-side-sec">
+							<button type="button" class="side-sec-toggle" @click="aiThinkingOpen = !aiThinkingOpen">
+								{{ aiThinkingOpen ? "▾" : "▸" }} 思考过程
+							</button>
+							<pre v-show="aiThinkingOpen" class="ai-think-body">{{ aiConsole.thinking }}</pre>
+						</section>
+						<section class="ai-side-sec">
+							<div class="side-sec-title">本轮输出</div>
+							<pre class="ai-out-body">{{ aiOutDisplay }}</pre>
+						</section>
+					</div>
+					<!-- 继续调整：续任务会话追问，新全文流式更新右侧对比（diff 基线仍是原文） -->
+					<div v-if="!aiPreview?.streaming && !aiPreview?.stopped && aiConsole.iterating" class="ai-iter-bar">
+						<el-input
+							v-model="aiIterDraft"
+							placeholder="继续调整：如「把 1.2 节再精简些」"
+							:disabled="aiConsole.running"
+							@keydown.enter="onIterEnter"
+						/>
+						<el-button
+							type="primary"
+							:disabled="aiConsole.running || aiIterDraft.trim() === ''"
+							@click="sendIteration"
+						>
+							发送
+						</el-button>
+					</div>
+				</aside>
+
+				<div class="ai-diff-main">
+					<div class="ai-preview-status">
+						<el-tag v-if="aiPreview?.stopped" size="small" type="warning" effect="plain">
+							内容不完整，不能应用
+						</el-tag>
+						<el-tag v-else-if="aiLengthWarn" size="small" type="danger" effect="plain">
+							长度 {{ body.length }} → {{ aiPreview?.result.length ?? 0 }} 字符，变化较大请核对
+						</el-tag>
+						<span class="diff-count">共 {{ changeBlocks.length }} 处变更</span>
+						<span class="diff-nav-spacer" />
+						<el-button
+							size="small"
+							text
+							:disabled="changeBlocks.length === 0"
+							@click="gotoChange(-1)"
+						>
+							<el-icon><ArrowUp /></el-icon>上一处
+						</el-button>
+						<el-button
+							size="small"
+							text
+							:disabled="changeBlocks.length === 0"
+							@click="gotoChange(1)"
+						>
+							<el-icon><ArrowDown /></el-icon>下一处
+						</el-button>
+					</div>
+					<div v-if="aiPreview?.streaming && aiPreview.result.trim() === ''" class="diff-empty">
+						<el-icon class="is-loading"><Loading /></el-icon>
+						<p>AI 正在生成，输出实时显示在左侧</p>
+						<p class="sub">完成后这里展示新旧内容对比</p>
+					</div>
+					<div v-else class="diff-wrap">
 				<div class="diff-head">
 					<span class="diff-head-cell">原文</span>
 					<span class="diff-head-cell">AI 结果</span>
@@ -1352,29 +1426,15 @@
 						</template>
 					</div>
 				</div>
-				<div class="diff-legend">
-					<span class="legend-item"><i class="dot del" />删除行</span>
-					<span class="legend-item"><i class="dot ins" />新增行</span>
-					<span class="legend-item">
-						<span class="seg del">行内删除</span><span class="seg ins">行内新增</span>
-					</span>
+					<div class="diff-legend">
+						<span class="legend-item"><i class="dot del" />删除行</span>
+						<span class="legend-item"><i class="dot ins" />新增行</span>
+						<span class="legend-item">
+							<span class="seg del">行内删除</span><span class="seg ins">行内新增</span>
+						</span>
+					</div>
 				</div>
-			</div>
-			<!-- 继续调整：续任务会话追问，新全文流式更新上方右列（diff 基线仍是原文） -->
-			<div v-if="!aiPreview?.streaming && !aiPreview?.stopped && aiConsole.iterating" class="ai-iter-bar">
-				<el-input
-					v-model="aiIterDraft"
-					placeholder="继续调整：如「把 1.2 节再精简些」（Enter 发送，新结果实时更新到上方 diff）"
-					:disabled="aiConsole.running"
-					@keydown.enter="onIterEnter"
-				/>
-				<el-button
-					type="primary"
-					:disabled="aiConsole.running || aiIterDraft.trim() === ''"
-					@click="sendIteration"
-				>
-					发送
-				</el-button>
+				</div>
 			</div>
 			<template #footer>
 				<el-button :disabled="aiPreview?.streaming || !aiPreview?.result" @click="copyAiResult">
@@ -1705,37 +1765,103 @@
 		color: var(--el-text-color-placeholder);
 		white-space: nowrap;
 	}
-	/* 弹窗状态条：生成中/已停止标签 + 变更计数 + 上一处/下一处导航 */
+	/* 双栏布局：左＝交互输出（状态/思考/本轮输出/继续调整），右＝新旧对比 */
+	.ai-preview-layout {
+		display: flex;
+		gap: 14px;
+		height: 64vh;
+	}
+	.ai-side {
+		width: 340px;
+		flex: none;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		min-height: 0;
+	}
+	.ai-side-status {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex: none;
+	}
+	.side-spacer {
+		flex: 1;
+	}
+	.ai-side-scroll {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.ai-side-sec {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.side-sec-toggle {
+		border: none;
+		background: none;
+		padding: 0;
+		cursor: pointer;
+		font-size: calc(16px + var(--font-shift, 0px));
+		color: var(--el-text-color-secondary);
+	}
+	.side-sec-toggle:hover {
+		color: var(--el-text-color-primary);
+	}
+	.side-sec-title {
+		font-size: calc(16px + var(--font-shift, 0px));
+		color: var(--el-text-color-secondary);
+	}
+	.ai-diff-main {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	/* 右栏状态条：停止/长度警示标签 + 变更计数 + 上一处/下一处导航 */
 	.ai-preview-status {
 		display: flex;
 		align-items: center;
 		gap: 10px;
 		margin-bottom: 8px;
+		flex: none;
 	}
 	.diff-count {
 		font-size: calc(16px + var(--font-shift, 0px));
 		color: var(--el-text-color-secondary);
 	}
-	/* 思考过程展开区（运行中就地查看模型在干什么） */
+	/* 思考过程（左侧栏目内滚动展示；正文小 2px 作辅助层级） */
 	.ai-think-body {
-		margin: 0 0 8px;
-		max-height: 180px;
-		overflow: auto;
+		margin: 0;
 		border-left: 2px solid var(--el-border-color-lighter);
 		padding-left: 10px;
 		font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-		font-size: calc(20px + var(--font-shift, 0px));
+		font-size: calc(18px + var(--font-shift, 0px));
 		line-height: 1.7;
 		color: var(--el-text-color-secondary);
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
-	/* 继续调整输入行：追问新全文流式更新上方 diff */
+	/* 本轮输出全文（markdown 源文本流式长出） */
+	.ai-out-body {
+		margin: 0;
+		min-height: 48px;
+		font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+		font-size: calc(20px + var(--font-shift, 0px));
+		line-height: 1.7;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	/* 继续调整输入行（左栏底部）：追问新全文流式更新右侧对比 */
 	.ai-iter-bar {
 		display: flex;
-		gap: 10px;
+		gap: 8px;
 		align-items: center;
-		margin-top: 10px;
+		flex: none;
 	}
 	.ai-iter-bar .el-input {
 		flex: 1;
@@ -1746,8 +1872,32 @@
 	.apply-wrap {
 		margin-left: 12px;
 	}
+	/* 生成初期（尚无产出）右栏占位：不摆原文对空白的稀疏对比 */
+	.diff-empty {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		border: 1px dashed var(--el-border-color-lighter);
+		border-radius: 8px;
+		color: var(--el-text-color-secondary);
+		font-size: calc(20px + var(--font-shift, 0px));
+	}
+	.diff-empty .el-icon {
+		font-size: 28px;
+		color: var(--el-color-primary);
+		margin-bottom: 4px;
+	}
+	.diff-empty .sub {
+		font-size: calc(16px + var(--font-shift, 0px));
+		color: var(--el-text-color-placeholder);
+	}
 	/* IDEA 式左右 diff：行号槽 + 行级红绿底 + +/− 行标记；行内再叠加字符级片段 */
 	.diff-wrap {
+		flex: 1;
+		min-height: 0;
 		display: flex;
 		flex-direction: column;
 		border: 1px solid var(--el-border-color-lighter);
@@ -1771,7 +1921,8 @@
 		border-left: 1px solid var(--el-border-color-lighter);
 	}
 	.diff-body {
-		max-height: 62vh;
+		flex: 1;
+		min-height: 0;
 		overflow: auto;
 		font-family: var(--font-mono, ui-monospace, Consolas, monospace);
 		font-size: calc(20px + var(--font-shift, 0px));

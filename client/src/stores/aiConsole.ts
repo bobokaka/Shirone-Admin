@@ -10,9 +10,6 @@ import { streamChat, streamEdit, type StreamEditInput, type StreamEditResult } f
  * 上下文由服务端会话持有：任务首轮建立 sessionId，结果弹窗追问复用（不重传历史）。
  */
 
-/** 思考流滚动保留上限：超出掐头续尾，防长思考撑爆展示区 */
-const THINKING_CAP = 8000;
-
 /** 结果弹窗迭代：任务成功且弹窗未关时由弹窗持有方注册，之后追问流式更新弹窗右列 */
 export interface AiResultIteration {
 	/** 一轮迭代开始：弹窗切回流式态（禁用应用、重置折叠导航） */
@@ -29,7 +26,7 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 	const running = ref(false);
 	/** 当前轮耗时（秒级跳动，弹窗状态条显示）；结束停在本轮最终值 */
 	const elapsedMs = ref(0);
-	/** 当前轮思考流（滚动截断），就地展示 */
+	/** 当前轮思考流（SSE 原样累积不截断，展示侧自行展开/收起） */
 	const thinking = ref("");
 	/** 当前会话 ID（服务端持有上下文）：任务首轮建立，结果弹窗追问复用 */
 	const sessionId = ref<string | null>(null);
@@ -76,9 +73,6 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 
 	function appendThinking(text: string): void {
 		thinking.value += text;
-		if (thinking.value.length > THINKING_CAP) {
-			thinking.value = `…（已截断）\n${thinking.value.slice(-THINKING_CAP)}`;
-		}
 	}
 
 	/** 流式轮公共执行：onText 回调累计全文；成功登记会话，返回全文；停止/失败返回 null（结局落在 lastOutcome/lastError） */
@@ -147,8 +141,10 @@ export const useAiConsoleStore = defineStore("aiConsole", () => {
 		const message = `${question}\n\n（请基于上一轮结果继续修改，输出修改后的完整正文；不要任何解释、前后缀或代码围栏。）`;
 		beginRound();
 		hooks.onStart();
-		const result = await runRound((handlers, signal) =>
-			streamChat({ sessionId: sessionId.value ?? undefined, message, maxTokens: 16384 }, handlers, signal),
+		const result = await runRound(
+			(handlers, signal) =>
+				streamChat({ sessionId: sessionId.value ?? undefined, message, maxTokens: 16384 }, handlers, signal),
+			(full) => hooks.onText(full),
 		);
 		if (result !== null) hooks.onDone(result);
 		else hooks.onEnd(lastOutcome.value === "stopped" ? "stopped" : "error");
