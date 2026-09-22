@@ -696,9 +696,9 @@
 		try {
 			const result = await aiConsole.run({
 				instruction:
-					"为这篇目标文章生成 80-160 字的中文摘要：概括主题与关键要点，客观陈述，只输出摘要本身。",
+					"为这篇目标文章生成一句话中文摘要，不超过 30 字：只点明文章大致讲了什么，客观陈述，只输出摘要本身，不加标点结尾也不解释。",
 				postPath: props.path,
-				maxTokens: 1024,
+				maxTokens: 256,
 			});
 			if (result === null) {
 				aiConsole.reportOutcome();
