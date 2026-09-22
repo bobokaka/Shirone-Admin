@@ -6,7 +6,7 @@ import { sanitizeUserSlug, suggestSlug } from "../lib/slug.js";
 import { applySavedOrder, loadPostOrder, savePostOrder } from "../services/postOrder.js";
 
 const createSchema = z.object({
-	title: z.string().min(1, "标题不能为空"),
+	title: z.string().min(1, "标题不能为空").optional(),
 	slug: z.string().optional(),
 });
 

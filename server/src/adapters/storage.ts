@@ -18,7 +18,7 @@ import { ApiError } from "../lib/errors.js";
 import { removeNavbarPostLinks, syncNavbarPostLinks } from "../lib/navbar-sync.js";
 import { momentId, shanghaiMomentStamp, shanghaiPostStamp, todayShanghai } from "../lib/datetime.js";
 import { parseFrontmatter, serializeFrontmatter } from "../lib/frontmatter.js";
-import { sanitizeUserSlug, suggestSlug } from "../lib/slug.js";
+import { draftSlug, sanitizeUserSlug, suggestSlug, UNTITLED_TITLE } from "../lib/slug.js";
 
 export const POST_ORDER = [
 	"title",
@@ -186,9 +186,15 @@ export async function readPost(rel: string): Promise<PostFile> {
 }
 
 export async function createPost(input: CreatePostInput): Promise<PostFile> {
-	const title = input.title.trim();
+	const title = (input.title ?? UNTITLED_TITLE).trim();
 	if (!title) throw new ApiError(400, "标题不能为空");
-	const suggested = input.slug ? sanitizeUserSlug(input.slug) : suggestSlug(title);
+	// 占位标题的新建走公共命名（blogs_日期流水号，与标题脱绑）；有真实标题仍按标题转写
+	const names = await fs.readdir(POSTS_DIR).catch(() => [] as string[]);
+	const suggested = input.slug
+		? sanitizeUserSlug(input.slug)
+		: title === UNTITLED_TITLE
+			? { slug: draftSlug(names) }
+			: suggestSlug(title);
 	const slug = await uniqueDir(POSTS_DIR, suggested.slug);
 	const dir = path.join(POSTS_DIR, slug);
 	await fs.mkdir(dir, { recursive: true });
@@ -320,11 +326,13 @@ export async function deletePost(rel: string): Promise<void> {
 		throw new ApiError(404, `文章不存在：${rel}`);
 	});
 	const doc = await readDoc(st.isDirectory() ? path.join(abs, "index.md") : abs);
-	if (st.isDirectory()) {
-		if (rel.replace(/\\/g, "/").split("/").length !== 1) {
+	// 目录形态：传顶层目录或 <slug>/index.md 都整目录删除（含配图），只删 md 会留孤儿目录
+	const dirForm = st.isDirectory() ? rel.replace(/\\/g, "/") : /^([^/]+)\/index\.md$/i.exec(rel.replace(/\\/g, "/"))?.[1];
+	if (dirForm) {
+		if (dirForm.includes("/")) {
 			throw new ApiError(400, "删除目录形式的文章只能传 slug 顶层目录");
 		}
-		await fs.rm(abs, { recursive: true, force: true });
+		await fs.rm(path.join(POSTS_DIR, dirForm), { recursive: true, force: true });
 	} else {
 		await fs.unlink(abs);
 	}

@@ -579,11 +579,11 @@
 		}
 	}
 
-	/** 新建：不问标题，直接建「未命名」草稿，列表顶部追加一条并就地进入空白编辑
-	 *  （未入手动排序的新文章一律排最前，与服务端归并规则一致） */
+	/** 新建：不问标题，直接建占位草稿（标题「未命名」，slug 走 blogs_日期流水号公共命名），
+	 *  列表顶部追加一条并就地进入空白编辑（未入手动排序的新文章一律排最前，与服务端归并规则一致） */
 	async function openCreate(): Promise<void> {
 		try {
-			const created = await postApi.create({ title: "未命名" });
+			const created = await postApi.create({});
 			posts.value.unshift(created.meta);
 			await select(created.meta);
 			mode.value = "edit";

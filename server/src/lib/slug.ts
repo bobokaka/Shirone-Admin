@@ -1,5 +1,21 @@
 import { pinyin } from "pinyin-pro";
 import type { SlugSuggestion } from "@shirone-admin/shared";
+import { todayShanghai } from "./datetime.js";
+
+/** 管理端「新增文章」直接落盘的占位标题（此标题下 slug 走公共命名规则，与标题脱绑） */
+export const UNTITLED_TITLE = "未命名";
+
+/** 新建草稿公共命名：blogs_YYYYMMDDNNN（当日流水号，唯一标识，不受标题影响） */
+export function draftSlug(existing: readonly string[]): string {
+	const day = todayShanghai().replace(/-/g, "");
+	const re = new RegExp(`^blogs_${day}(\\d+)$`);
+	let max = 0;
+	for (const name of existing) {
+		const m = re.exec(name);
+		if (m) max = Math.max(max, Number(m[1]));
+	}
+	return `blogs_${day}${String(max + 1).padStart(3, "0")}`;
+}
 
 /** 标题 → ASCII slug（中文转拼音）。用户显式传入的 slug 只做合法性清洗。 */
 export function suggestSlug(title: string): SlugSuggestion {

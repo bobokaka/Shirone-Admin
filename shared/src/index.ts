@@ -155,7 +155,8 @@ export interface LocalFolderList {
 }
 
 export interface CreatePostInput {
-	title: string;
+	/** 省略即占位草稿（标题「未命名」，slug 走 blogs_日期流水号公共命名） */
+	title?: string;
 	slug?: string;
 }
 
