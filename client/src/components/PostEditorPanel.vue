@@ -1132,7 +1132,7 @@
 			</MdEditor>
 		</div>
 
-		<el-drawer v-model="drawerVisible" title="文章信息" size="480px">
+		<el-drawer v-model="drawerVisible" title="文章信息" size="640px">
 			<el-form label-position="top" class="drawer-form">
 				<el-form-item label="发布日期">
 					<div class="published-ro">
@@ -1179,6 +1179,7 @@
 						allow-create
 						default-first-option
 						reserve-keyword
+						tag-type="primary"
 						placeholder="选择已有，或输入回车新建"
 						style="width: 100%"
 					>
@@ -1204,7 +1205,7 @@
 							</button>
 						</span>
 					</template>
-					<el-input v-model="description" type="textarea" :rows="2" placeholder="留空自动截取正文前段" />
+					<el-input v-model="description" type="textarea" :rows="6" placeholder="留空自动截取正文前段" />
 				</el-form-item>
 				<el-form-item>
 					<template #label>
