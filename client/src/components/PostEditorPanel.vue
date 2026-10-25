@@ -83,6 +83,54 @@
 	const categoryOptions = computed(() => countBy(allPosts.value.map((p) => p.category)));
 	const tagOptions = computed(() => countBy(allPosts.value.flatMap((p) => p.tags)));
 
+	/* ---------- 分类下拉首项固定「新增分类」：点选即在原位变成输入框 + 确认/取消按钮，
+	   行内完成新建，把原先 allow-create 的隐式新建显式化 ---------- */
+
+	const categoryQuery = ref("");
+	/** 本会话新建、尚无文章使用的分类名（聚合候选给不出它们） */
+	const createdCategories = ref<string[]>([]);
+	const creatingCategory = ref(false);
+	const newCategoryName = ref("");
+	const createCategoryInput = ref<HTMLInputElement>();
+
+	const categoryFiltered = computed(() => {
+		const created = createdCategories.value
+			.filter((n) => !categoryOptions.value.some((o) => o.name === n))
+			.map((n) => ({ name: n, n: 0 }));
+		const all = [...created, ...categoryOptions.value];
+		const q = categoryQuery.value.trim().toLowerCase();
+		return q ? all.filter((o) => o.name.toLowerCase().includes(q)) : all;
+	});
+
+	function onCategoryQuery(q: string): void {
+		categoryQuery.value = q;
+	}
+
+	function onCategoryDropdown(open: boolean): void {
+		if (!open) {
+			onCategoryQuery("");
+			creatingCategory.value = false;
+		}
+	}
+
+	function startCreateCategory(): void {
+		newCategoryName.value = categoryQuery.value.trim();
+		creatingCategory.value = true;
+		void nextTick(() => createCategoryInput.value?.focus());
+	}
+
+	function confirmCreateCategory(): void {
+		const name = newCategoryName.value.trim();
+		creatingCategory.value = false;
+		if (!name) return;
+		category.value = name;
+		if (!createdCategories.value.includes(name)) createdCategories.value.push(name);
+	}
+
+	function cancelCreateCategory(): void {
+		creatingCategory.value = false;
+	}
+
 	/** 同一时刻只挂载一个编辑器，id 区分就地编辑与完整页便于排查 */
 	const editorId = computed(() => (props.expandable ? "post-inline-editor" : "post-editor"));
 
@@ -1144,13 +1192,34 @@
 					<el-select
 						v-model="category"
 						filterable
-						allow-create
+						:filter-method="onCategoryQuery"
 						default-first-option
 						clearable
-						placeholder="选择已有分类，或输入新建"
+						placeholder="选择分类，或点「新增分类」"
 						style="width: 100%"
+						@visible-change="onCategoryDropdown"
 					>
-						<el-option v-for="c in categoryOptions" :key="c.name" :value="c.name" :label="c.name">
+						<div v-if="creatingCategory" class="create-row">
+							<input
+								ref="createCategoryInput"
+								v-model="newCategoryName"
+								class="create-input"
+								placeholder="新分类名"
+								@keydown.enter.stop.prevent="confirmCreateCategory"
+								@keydown.esc.stop.prevent="cancelCreateCategory"
+							/>
+							<el-icon class="create-btn ok" @click="confirmCreateCategory">
+								<Icon icon="material-symbols:check" />
+							</el-icon>
+							<el-icon class="create-btn" @click="cancelCreateCategory">
+								<Icon icon="material-symbols:close" />
+							</el-icon>
+						</div>
+						<div v-else class="create-entry" @click="startCreateCategory">
+							<el-icon><Icon icon="material-symbols:add" /></el-icon>
+							<span>新增分类</span>
+						</div>
+						<el-option v-for="c in categoryFiltered" :key="c.name" :value="c.name" :label="c.name">
 							<span>{{ c.name }}</span>
 							<span class="opt-count">{{ c.n }} 篇</span>
 						</el-option>
@@ -1618,6 +1687,65 @@
 		float: right;
 		color: var(--el-text-color-secondary);
 		font-size: calc(16px + var(--font-shift, 0px));
+	}
+	/* 分类下拉首行「新增分类」入口：主色引导，与普通候选区分 */
+	.create-entry {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		height: 40px;
+		padding: 0 20px;
+		margin-bottom: 4px;
+		border-bottom: 1px solid var(--el-border-color-lighter);
+		color: var(--el-color-primary);
+		font-weight: 600;
+		font-size: var(--el-font-size-base);
+		cursor: pointer;
+	}
+	.create-entry:hover {
+		background: var(--el-fill-color-light);
+	}
+	/* 新增行内编辑态：输入框 + 确认/取消图标按钮 */
+	.create-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 20px;
+		margin-bottom: 4px;
+		border-bottom: 1px solid var(--el-border-color-lighter);
+	}
+	.create-input {
+		flex: 1;
+		min-width: 0;
+		height: 34px;
+		padding: 0 10px;
+		border: 1px solid var(--el-border-color);
+		border-radius: 4px;
+		background: var(--el-fill-color-blank);
+		color: var(--el-text-color-primary);
+		font-size: var(--el-font-size-base);
+		outline: none;
+	}
+	.create-input:focus {
+		border-color: var(--el-color-primary);
+	}
+	.create-btn {
+		flex-shrink: 0;
+		padding: 4px;
+		border-radius: 4px;
+		font-size: 22px;
+		color: var(--el-text-color-secondary);
+		cursor: pointer;
+	}
+	.create-btn:hover {
+		background: var(--el-fill-color-light);
+		color: var(--el-text-color-primary);
+	}
+	.create-btn.ok {
+		color: var(--el-color-primary);
+	}
+	.create-btn.ok:hover {
+		color: var(--el-color-primary-light-3);
 	}
 	/* 分栏编辑工具按钮：图标尺寸与内置工具位对齐 */
 	.split-toolbar-icon {
